@@ -1,0 +1,15 @@
+[repository]
+name = "HyprLUI"
+authors = ["Hyprhook"]
+commit_pins = [
+  [
+    "a47147bc095e5b3be3eb8bd04f0ac242b968cd4d", # hyprland
+    "",                                         # hyprLUI
+  ], # 0.55.1
+]
+
+[HyprLUI]
+description = ""
+authors = ["Hyprhook"]
+output = "HyprLUI.so"
+build = ["make all"]
