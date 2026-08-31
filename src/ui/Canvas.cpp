@@ -1,5 +1,5 @@
 #include "Canvas.hpp"
-#include "gfx.hpp"
+#include "../render/gfx.hpp"
 
 #include <algorithm>
 

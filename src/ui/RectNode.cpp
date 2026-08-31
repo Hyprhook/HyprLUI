@@ -1,5 +1,5 @@
 #include "RectNode.hpp"
-#include "gfx.hpp"
+#include "../render/gfx.hpp"
 
 namespace HyprLUI {
 

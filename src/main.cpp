@@ -1,19 +1,17 @@
-#define WLR_USE_UNSTABLE
-
+// WLR_USE_UNSTABLE is already defined via -D in the Makefile/meson.build.
 #include "globals.hpp"
-#include <hyprlang.hpp>
 #include <unistd.h>
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/helpers/Color.hpp>
+#include <hyprland/src/helpers/memory/Memory.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/config/values/types/BoolValue.hpp>
 
-#include "./hyprlui/Render.hpp"
-#include "./hyprlui/UIManager.hpp"
-
-#include "globals.hpp"
+#include "render/Render.hpp"
+#include "ui/UIManager.hpp"
 
 // Do NOT change this function.
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
@@ -81,7 +79,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         Global::hyprlandReady = true;
     }
 
-    HyprlandAPI::addConfigValue(Global::PHANDLE, "plugin:hyprlui:enabled", Hyprlang::CConfigValue((Hyprlang::INT)1));
+    // addConfigValue is deprecated *and* stubbed out (always returns false)
+    // on this Hyprland dev snapshot - addConfigValueV2, taking a
+    // Config::Values::IValue, is the supported replacement.
+    HyprlandAPI::addConfigValueV2(Global::PHANDLE, makeShared<Config::Values::CBoolValue>("plugin:hyprlui:enabled", "Whether HyprLUI is active.", true));
 
     HyprLUI::RenderHook::registerHooks(Global::PHANDLE);
 

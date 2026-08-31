@@ -1,5 +1,5 @@
 #include "Render.hpp"
-#include "UIManager.hpp"
+#include "../ui/UIManager.hpp"
 
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/render/Renderer.hpp>

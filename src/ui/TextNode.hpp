@@ -7,7 +7,7 @@
 // rasterizing via Cairo/Pango every frame would be needlessly expensive.
 
 #include "Node.hpp"
-#include "gfx.hpp"
+#include "../render/gfx.hpp"
 
 #include <hyprland/src/helpers/Color.hpp>
 
