@@ -8,6 +8,10 @@
 #include <hyprland/src/helpers/Color.hpp>
 #include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/Compositor.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
+
+#include "./hyprlui/Render.hpp"
+#include "./hyprlui/UIManager.hpp"
 
 #include "globals.hpp"
 
@@ -15,6 +19,44 @@
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
     return HYPRLAND_API_VERSION;
 }
+
+namespace {
+
+    // Toggles a small demo canvas so you can verify the pipeline works
+    // end-to-end before wiring anything else up. Invoke via:
+    //   hyprctl eval 'hl.plugin.hyprlui.demo()'
+    // or bind a key to it from a Lua config with:
+    //   hl.bind("SUPER + D", function() hl.plugin.hyprlui.demo() end)
+    void toggleDemoCanvas() {
+        auto& mgr = HyprLUI::CUIManager::get();
+
+        if (mgr.hasCanvas("hyprlui_demo")) {
+            mgr.removeCanvas("hyprlui_demo");
+            return;
+        }
+
+        mgr.createCanvas("hyprlui_demo", {100, 100}, {440, 120});
+
+        // Node draw order within a canvas is creation order, so add the
+        // background panel first, then the text that sits on top of it.
+        mgr.addRect("hyprlui_demo", "panel", {0, 0}, {440, 120}, CHyprColor{0.05, 0.05, 0.05, 0.75}, 8);
+        mgr.addText("hyprlui_demo", "title", {20, 16}, "Hello from HyprLUI!", 24, CHyprColor{1.0, 1.0, 1.0, 1.0});
+        mgr.addText("hyprlui_demo", "subtitle", {20, 60}, "Rendered from C++, ready for Lua.", 14, CHyprColor{0.8, 0.8, 0.8, 1.0});
+    }
+
+    // Lua-callable entry point registered below as hl.plugin.hyprlui.demo.
+    // `lua_State*` is forward-declared only (see PluginAPI.hpp) - fine here
+    // since this callback takes no Lua args and returns none (0 = no values
+    // pushed back onto the Lua stack). If a future binding needs to read
+    // arguments or push a return value, it'll need the real Lua headers
+    // (lua.h/lauxlib.h) and a matching pkg-config dependency added to the
+    // build - see PLUGIN_LUA_FN in PluginAPI.hpp.
+    int luaToggleDemo(lua_State*) {
+        toggleDemoCanvas();
+        return 0;
+    }
+
+} // namespace
 
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     Global::PHANDLE               = handle;
@@ -35,9 +77,22 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     // If there are already monitors (meaning we're past initialization), mark as ready immediately
     // This handles the case where the plugin is loaded dynamically after Hyprland has started
-    if (g_pCompositor && !g_pCompositor->m_monitors.empty()) {
+    if (g_pCompositor && !State::monitorState()->monitors().empty()) {
         Global::hyprlandReady = true;
     }
+
+    HyprlandAPI::addConfigValue(Global::PHANDLE, "plugin:hyprlui:enabled", Hyprlang::CConfigValue((Hyprlang::INT)1));
+
+    HyprLUI::RenderHook::registerHooks(Global::PHANDLE);
+
+    // NOTE: addDispatcher/addDispatcherV2 are stubbed out (always return
+    // false) on this Hyprland dev snapshot - the old string-keyed dispatcher
+    // table plugins used to hook into no longer exists now that config is
+    // Lua-based. The supported way to expose a plugin action is
+    // addLuaFunction, which registers a C function under
+    // hl.plugin.<namespace>.<name> in the Lua config's global state.
+    HyprlandAPI::addLuaFunction(Global::PHANDLE, "hyprlui", "demo", &luaToggleDemo);
+
     const CHyprColor goodColor(0.0f, 1.0f, 0.0f, 1.0f);
     HyprlandAPI::addNotification(Global::PHANDLE, std::format("[{}] initialized.", Global::pluginName), goodColor, 5000);
 
@@ -47,5 +102,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
-    // ...
+    HyprLUI::CUIManager::get().clear();
+    HyprLUI::RenderHook::unregisterHooks(Global::PHANDLE);
+    HyprlandAPI::removeLuaFunction(Global::PHANDLE, "hyprlui", "demo");
 }

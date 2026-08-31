@@ -20,7 +20,7 @@
       owner = "hyprwm";
       repo = "Hyprland";
       type = "github";
-      ref = "v0.55.1";
+      # ref = "v0.55.1";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.systems.follows = "systems";
     };
