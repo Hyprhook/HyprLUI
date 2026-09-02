@@ -3,16 +3,17 @@
 // Canvas.hpp
 //
 // A Canvas is a rectangular region on screen (screen-space, in pixels) that
-// owns and draws an ordered list of Nodes. Think of it as a single "window"
-// or panel of your future GUI - a Lua script will typically create one
-// Canvas per GUI element it wants on screen.
+// owns and draws a single root Widget - a Lua script will typically create
+// one Canvas per GUI element it wants on screen (a HUD, a popup, a bar...)
+// via hl.plugin.hyprlui.window{...}. Renamed to "Window" once anchors +
+// monitor targeting land (DESIGN.md Phase 2) - for now it's still a plain
+// absolute-position box.
 
-#include "Node.hpp"
+#include "Widget.hpp"
 
 #include <hyprland/src/helpers/math/Math.hpp>
 
 #include <string>
-#include <vector>
 
 namespace HyprLUI {
 
@@ -30,20 +31,24 @@ namespace HyprLUI {
         CCanvas(std::string name, const Vector2D& position, const Vector2D& size, EZOrder zorder = EZOrder::Overlay) :
             m_name(std::move(name)), m_position(position), m_size(size), m_zorder(zorder) {}
 
+        // Runs layout (measure + arrange over the whole tree) and renders
+        // the root widget. Called once per relevant render stage.
         void render();
 
         // Marks this canvas's full box dirty so Hyprland schedules a repaint
         // that actually includes it. Hyprland only recomposites/presents
         // damaged regions - drawing into the framebuffer during render()
-        // without this is not enough to make it show up on screen. Called
-        // automatically by CUIManager on create/add/remove; call it
-        // yourself too after any change that isn't already covered by one
-        // of those (e.g. mutating a node in place via findNode()).
+        // without this is not enough to make it show up on screen. Call
+        // after construction and after any mutation of the tree (the Lua
+        // bridge does this for you on every mutating call).
         void damage() const;
 
-        PNode addNode(PNode node);
-        void  removeNode(const std::string& id);
-        PNode findNode(const std::string& id) const;
+        void setRoot(PWidget root) {
+            m_root = std::move(root);
+        }
+        CWidget* root() const {
+            return m_root.get();
+        }
 
         const std::string& name() const {
             return m_name;
@@ -79,12 +84,12 @@ namespace HyprLUI {
         }
 
       private:
-        std::string        m_name;
-        Vector2D            m_position;
-        Vector2D            m_size;
-        EZOrder             m_zorder;
-        bool                m_visible = true;
-        std::vector<PNode>  m_nodes;
+        std::string m_name;
+        Vector2D    m_position;
+        Vector2D    m_size;
+        EZOrder     m_zorder;
+        bool        m_visible = true;
+        PWidget     m_root;
     };
 
     using PCanvas = std::shared_ptr<CCanvas>;

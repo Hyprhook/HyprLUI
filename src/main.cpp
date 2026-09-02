@@ -12,6 +12,10 @@
 
 #include "render/Render.hpp"
 #include "ui/UIManager.hpp"
+#include "ui/LuaBridge.hpp"
+#include "ui/ContainerWidget.hpp"
+#include "ui/RectNode.hpp"
+#include "ui/TextNode.hpp"
 
 // Do NOT change this function.
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
@@ -26,20 +30,32 @@ namespace {
     // or bind a key to it from a Lua config with:
     //   hl.bind("SUPER + D", function() hl.plugin.hyprlui.demo() end)
     void toggleDemoCanvas() {
-        auto& mgr = HyprLUI::CUIManager::get();
+        using namespace HyprLUI;
+
+        auto& mgr = CUIManager::get();
 
         if (mgr.hasCanvas("hyprlui_demo")) {
             mgr.removeCanvas("hyprlui_demo");
             return;
         }
 
-        mgr.createCanvas("hyprlui_demo", {100, 100}, {440, 120});
+        // A Stack as the root so the background panel (absolutely
+        // positioned to fill it) can sit behind the text column, which is
+        // itself a Column so the two lines stack with a gap between them -
+        // exercises both container types the Phase 1 widget tree ships
+        // with. This is exactly what hyprlui.window{...} builds from Lua;
+        // see LuaBridge.hpp for the declarative equivalent.
+        auto root = std::make_shared<CStackWidget>("root");
+        root->addChild(std::make_shared<CRectNode>("panel", Vector2D{0, 0}, Vector2D{440, 120}, CHyprColor{0.05, 0.05, 0.05, 0.75}, 8));
 
-        // Node draw order within a canvas is creation order, so add the
-        // background panel first, then the text that sits on top of it.
-        mgr.addRect("hyprlui_demo", "panel", {0, 0}, {440, 120}, CHyprColor{0.05, 0.05, 0.05, 0.75}, 8);
-        mgr.addText("hyprlui_demo", "title", {20, 16}, "Hello from HyprLUI!", 24, CHyprColor{1.0, 1.0, 1.0, 1.0});
-        mgr.addText("hyprlui_demo", "subtitle", {20, 60}, "Rendered from C++, ready for Lua.", 14, CHyprColor{0.8, 0.8, 0.8, 1.0});
+        auto textColumn = std::make_shared<CFlexWidget>("text", Vector2D{20, 16}, EFlexDirection::Column, /* gap = */ 6);
+        textColumn->addChild(std::make_shared<CTextNode>("title", Vector2D{0, 0}, "Hello from HyprLUI!", 24, CHyprColor{1.0, 1.0, 1.0, 1.0}));
+        textColumn->addChild(std::make_shared<CTextNode>("subtitle", Vector2D{0, 0}, "Rendered from C++, ready for Lua.", 14, CHyprColor{0.8, 0.8, 0.8, 1.0}));
+        root->addChild(textColumn);
+
+        auto canvas = mgr.createCanvas("hyprlui_demo", {100, 100}, {440, 120});
+        canvas->setRoot(root);
+        canvas->damage();
     }
 
     // Lua-callable entry point registered below as hl.plugin.hyprlui.demo.
@@ -94,6 +110,10 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // hl.plugin.<namespace>.<name> in the Lua config's global state.
     HyprlandAPI::addLuaFunction(Global::PHANDLE, "hyprlui", "demo", &luaToggleDemo);
 
+    // The real public API: hl.plugin.hyprlui.create_canvas/add_rect/add_text/...
+    // See src/ui/LuaBridge.hpp for the full list and hyprland.lua usage.
+    HyprLUI::Lua::registerFunctions(Global::PHANDLE);
+
     const CHyprColor goodColor(0.0f, 1.0f, 0.0f, 1.0f);
     HyprlandAPI::addNotification(Global::PHANDLE, std::format("[{}] initialized.", Global::pluginName), goodColor, 5000);
 
@@ -106,4 +126,5 @@ APICALL EXPORT void PLUGIN_EXIT() {
     HyprLUI::CUIManager::get().clear();
     HyprLUI::RenderHook::unregisterHooks(Global::PHANDLE);
     HyprlandAPI::removeLuaFunction(Global::PHANDLE, "hyprlui", "demo");
+    HyprLUI::Lua::unregisterFunctions(Global::PHANDLE);
 }

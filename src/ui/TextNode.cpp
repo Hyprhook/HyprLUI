@@ -3,7 +3,7 @@
 namespace HyprLUI {
 
     CTextNode::CTextNode(std::string id, const Vector2D& position, std::string text, int pointSize, CHyprColor color, std::string fontFamily) :
-        CNode(std::move(id), position, /* size = */ Vector2D{0, 0}), m_text(std::move(text)), m_pointSize(pointSize), m_color(color), m_fontFamily(std::move(fontFamily)) {}
+        CWidget(std::move(id), position), m_text(std::move(text)), m_pointSize(pointSize), m_color(color), m_fontFamily(std::move(fontFamily)) {}
 
     void CTextNode::rebuildTexture() {
         m_texture = gfx::makeTextTexture(m_text, m_color, m_pointSize, m_fontFamily);

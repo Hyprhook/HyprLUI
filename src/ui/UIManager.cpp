@@ -10,7 +10,6 @@ namespace HyprLUI {
     PCanvas CUIManager::createCanvas(const std::string& name, const Vector2D& position, const Vector2D& size, EZOrder zorder) {
         auto canvas          = std::make_shared<CCanvas>(name, position, size, zorder);
         m_canvases[name]     = canvas;
-        canvas->damage();
         return canvas;
     }
 
@@ -33,22 +32,6 @@ namespace HyprLUI {
     PCanvas CUIManager::getCanvas(const std::string& name) const {
         auto it = m_canvases.find(name);
         return it == m_canvases.end() ? nullptr : it->second;
-    }
-
-    PNode CUIManager::addText(const std::string& canvasName, const std::string& id, const Vector2D& position, const std::string& text, int pointSize, CHyprColor color) {
-        auto canvas = getCanvas(canvasName);
-        if (!canvas)
-            return nullptr;
-
-        return canvas->addNode(std::make_shared<CTextNode>(id, position, text, pointSize, color));
-    }
-
-    PNode CUIManager::addRect(const std::string& canvasName, const std::string& id, const Vector2D& position, const Vector2D& size, CHyprColor color, int rounding) {
-        auto canvas = getCanvas(canvasName);
-        if (!canvas)
-            return nullptr;
-
-        return canvas->addNode(std::make_shared<CRectNode>(id, position, size, color, rounding));
     }
 
     void CUIManager::renderOverlay() {
