@@ -29,10 +29,34 @@
 // Window construction and mutation:
 //
 //   window{ name, x = 0, y = 0, w, h, zorder = "overlay"|"background",
-//           <exactly one root widget> }
+//           anchor, monitor, <exactly one root widget> }
 //     Opens a new window with the given widget tree as its root. If w/h
 //     are omitted the window sizes itself to the root's measured content.
 //     Errors if `name` is already in use.
+//
+//     Without `anchor`: x/y are a raw global (compositor-space) position,
+//     same as Phase 1.
+//
+//     With `anchor` (one of top-left/top/top-right/left/center/right/
+//     bottom-left/bottom/bottom-right): x/y are reinterpreted as an offset
+//     from that point on the target monitor's usable box (i.e. excluding
+//     space other bars/panels have already reserved) - positive x/y always
+//     pushes inward from whichever edge(s) the anchor touches. `monitor` is
+//     optional and, if given, uses the exact same selector syntax as
+//     Hyprland's own window/layer rule `mon:` fields (a direction char,
+//     "+N"/"-N", a numeric id, or a static selector/output name), resolved
+//     relative to whichever monitor is focused *right now*. There is
+//     deliberately no "current"/"focused" keyword: Hyprland's own selector
+//     parser treats the literal string "current" as an alias for whatever
+//     reference monitor it's given, which would shadow an actual monitor a
+//     user has genuinely named "current" - so omit `monitor` entirely to
+//     mean "the focused monitor". If a given selector matches nothing
+//     (typo, unplugged output), this falls back to the focused monitor
+//     rather than erroring. Either way the monitor is picked ONCE, at
+//     window-creation time - it never changes afterwards, even if you
+//     focus a different screen later. Its box IS re-read every frame
+//     though, so a resolution/reserved-area change on that monitor still
+//     moves the window correctly.
 //
 //   remove_canvas(name)
 //     Closes a window and everything in it.
@@ -57,6 +81,13 @@
 //       },
 //   }
 //   hl.bind("SUPER + G", function() hyprlui.remove_canvas("greeting") end)
+//
+//   -- anchored to the top-right of the focused monitor's usable area,
+//   -- 10px in from both edges:
+//   hyprlui.window{
+//       name = "hud", anchor = "top-right", x = 10, y = 10,
+//       hyprlui.Text{ id = "label", text = "HUD" },
+//   }
 //
 // Note the Box above is behind/outside the visible flow in this example
 // only to illustrate nesting - a background panel that should sit *behind*

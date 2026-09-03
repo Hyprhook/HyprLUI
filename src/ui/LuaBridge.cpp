@@ -5,6 +5,9 @@
 #include "TextNode.hpp"
 
 #include <hyprland/src/helpers/Color.hpp>
+#include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/state/MonitorQuery.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
 
 // This Lua build's headers don't guard their declarations with
 // `extern "C"` themselves (only LUAMOD_API does) - without wrapping the
@@ -174,7 +177,7 @@ namespace HyprLUI::Lua {
             const double y       = fieldNumber(L, idx, "y", 0);
             const bool   visible = optFieldBool(L, idx, "visible", true);
 
-            PWidget widget;
+            PWidget      widget;
 
             if (type == "box") {
                 const double w        = requireFieldNumber(L, idx, "w", "hyprlui.Box");
@@ -188,16 +191,16 @@ namespace HyprLUI::Lua {
                 const int  size  = static_cast<int>(fieldNumber(L, idx, "size", 16));
                 const auto color = parseColorField(L, idx, "color", CHyprColor{1.0, 1.0, 1.0, 1.0}, "hyprlui.Text");
                 const auto font  = optFieldString(L, idx, "font", "sans");
-                widget            = std::make_shared<CTextNode>(id, Vector2D{x, y}, text, size, color, font);
+                widget           = std::make_shared<CTextNode>(id, Vector2D{x, y}, text, size, color, font);
 
             } else if (type == "stack") {
                 widget = std::make_shared<CStackWidget>(id, Vector2D{x, y});
 
             } else if (type == "row" || type == "column") {
-                const double gap       = fieldNumber(L, idx, "gap", 0);
-                const double padding   = fieldNumber(L, idx, "padding", 0);
-                const auto   alignStr  = optFieldString(L, idx, "align", "start");
-                EAlign       align     = EAlign::Start;
+                const double gap      = fieldNumber(L, idx, "gap", 0);
+                const double padding  = fieldNumber(L, idx, "padding", 0);
+                const auto   alignStr = optFieldString(L, idx, "align", "start");
+                EAlign       align    = EAlign::Start;
                 if (alignStr == "center")
                     align = EAlign::Center;
                 else if (alignStr == "end")
@@ -230,17 +233,45 @@ namespace HyprLUI::Lua {
             return widget;
         }
 
+        // Maps a Lua-facing anchor string onto EAnchor. luaL_error (never
+        // returns) on anything else.
+        EAnchor parseAnchor(lua_State* L, const std::string& anchorStr) {
+            if (anchorStr == "top-left")
+                return EAnchor::TopLeft;
+            if (anchorStr == "top")
+                return EAnchor::Top;
+            if (anchorStr == "top-right")
+                return EAnchor::TopRight;
+            if (anchorStr == "left")
+                return EAnchor::Left;
+            if (anchorStr == "center")
+                return EAnchor::Center;
+            if (anchorStr == "right")
+                return EAnchor::Right;
+            if (anchorStr == "bottom-left")
+                return EAnchor::BottomLeft;
+            if (anchorStr == "bottom")
+                return EAnchor::Bottom;
+            if (anchorStr == "bottom-right")
+                return EAnchor::BottomRight;
+
+            luaL_error(L, "hyprlui.window: 'anchor' must be one of top-left/top/top-right/left/center/right/bottom-left/bottom/bottom-right, got '%s'", anchorStr.c_str());
+            return EAnchor::TopLeft; // unreachable - silences -Wreturn-type
+        }
+
         // --- hl.plugin.hyprlui.* implementations -------------------------
 
         int luaWindow(lua_State* L) {
             luaL_checktype(L, 1, LUA_TTABLE);
 
-            const auto name = requireFieldString(L, 1, "name", "hyprlui.window");
-            const auto x    = fieldNumber(L, 1, "x", 0);
-            const auto y    = fieldNumber(L, 1, "y", 0);
-            const auto fw   = optFixedField(L, 1, "w");
-            const auto fh   = optFixedField(L, 1, "h");
-            const auto zStr = optFieldString(L, 1, "zorder", "overlay");
+            const auto name       = requireFieldString(L, 1, "name", "hyprlui.window");
+            const auto x          = fieldNumber(L, 1, "x", 0);
+            const auto y          = fieldNumber(L, 1, "y", 0);
+            const auto fw         = optFixedField(L, 1, "w");
+            const auto fh         = optFixedField(L, 1, "h");
+            const auto zStr       = optFieldString(L, 1, "zorder", "overlay");
+            const auto anchorStr  = optFieldString(L, 1, "anchor", "");
+            const auto monitorStr = optFieldString(L, 1, "monitor", "");
 
             EZOrder    zorder = EZOrder::Overlay;
             if (zStr == "background")
@@ -252,9 +283,9 @@ namespace HyprLUI::Lua {
             if (mgr.hasCanvas(name))
                 return luaL_error(L, "hyprlui.window: a window named '%s' already exists", name.c_str());
 
-            PWidget root;
-            int     autoId = 0;
-            const auto n = lua_rawlen(L, 1);
+            PWidget    root;
+            int        autoId = 0;
+            const auto n      = lua_rawlen(L, 1);
             for (lua_Integer i = 1; i <= static_cast<lua_Integer>(n); ++i) {
                 lua_rawgeti(L, 1, i);
                 if (lua_istable(L, -1)) {
@@ -273,7 +304,47 @@ namespace HyprLUI::Lua {
 
             const Vector2D size{fw ? *fw : root->size().x, fh ? *fh : root->size().y};
 
-            auto canvas = mgr.createCanvas(name, {x, y}, size, zorder);
+            // No anchor: unchanged Phase 1 behavior - x/y are a raw global
+            // position, same escape hatch a Stack's children already use.
+            if (anchorStr.empty()) {
+                auto canvas = mgr.createCanvas(name, {x, y}, size, zorder);
+                canvas->setRoot(root);
+                canvas->damage();
+                return 0;
+            }
+
+            // Anchor given: x/y are reinterpreted as an offset from the
+            // anchor point (same "relative to parent" convention a
+            // widget's x/y already has relative to its parent widget),
+            // not a global position. `monitor` is optional and uses
+            // Hyprland's own monitor-selector syntax (same as window-rule
+            // "mon:" fields - direction chars/+N/-N/numeric id/static
+            // selector/output name), resolved relative to the currently
+            // focused monitor so e.g. "+1" means "one past focused". Note
+            // there's deliberately no "current"/"focused" keyword here -
+            // Hyprland's own selector parser treats the literal string
+            // "current" as a magic alias for whatever `.relativeTo()` was
+            // given (MonitorQueryCore.cpp's fromConfigString()), which
+            // would shadow an *actual* monitor a user has genuinely named
+            // "current" in their own monitor rules. So: omit `monitor`
+            // entirely to mean "the focused monitor", full stop - and if a
+            // given selector doesn't match anything (typo, output
+            // unplugged), fall back to the focused monitor too rather than
+            // erroring, since "couldn't find that exact spot, use the
+            // sensible default" is more useful here than failing the whole
+            // window. Resolved ONCE here, by name - see
+            // CCanvas::recomputeAnchorPosition().
+            const EAnchor anchor  = parseAnchor(L, anchorStr);
+            auto          monitor = monitorStr.empty() ? Desktop::focusState()->monitor() :
+                                                         State::CMonitorQuery{*State::monitorState()}.relativeTo(Desktop::focusState()->monitor()).configString(monitorStr).run();
+            if (!monitor)
+                monitor = Desktop::focusState()->monitor();
+            if (!monitor)
+                return luaL_error(L, "hyprlui.window: no monitor available to anchor '%s' against", name.c_str());
+
+            auto canvas = mgr.createCanvas(name, {0, 0}, size, zorder);
+            canvas->setAnchor(anchor, std::string{monitor->name()}, {x, y});
+            canvas->recomputeAnchorPosition();
             canvas->setRoot(root);
             canvas->damage();
             return 0;

@@ -118,6 +118,47 @@ hl.bind("ALT + SHIFT + R", function()
 	end
 end, { description = "HyprLUI: remove the test window" })
 
+-- ALT + SHIFT + A: create/toggle an anchored window (Phase 2) - top-right
+-- corner of the focused monitor's usable box (excludes existing bars/
+-- panels for free, via logicalBoxMinusReserved()), 10px in from both
+-- edges. `monitor` is omitted on purpose - that's what means "the focused
+-- monitor" now (there's no "current" keyword, see LuaBridge.hpp). Toggles:
+-- removes it if it already exists.
+local HYPRLUI_ANCHOR_WINDOW = "hyprlui_anchor_test"
+local hyprluiAnchorWindowOpen = false
+hl.bind("ALT + SHIFT + A", function()
+	if hyprluiAnchorWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_ANCHOR_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiAnchorWindowOpen = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = HYPRLUI_ANCHOR_WINDOW,
+			anchor = "top-right",
+			monitor = "test",
+			x = 10,
+			y = 10,
+			hl.plugin.hyprlui.Box({
+				id = "root",
+				w = 220,
+				h = 60,
+				color = 0xcc224488,
+				rounding = 8,
+			}),
+		})
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.window (anchored)", err)
+	else
+		hyprluiAnchorWindowOpen = true
+	end
+end, { description = "HyprLUI: toggle an anchored top-right test window" })
+
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required
 -- w/h fields, so buildWidget() hits requireFieldNumber() -> luaL_error()

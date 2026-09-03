@@ -11,6 +11,16 @@
 ---@alias HyprLUI.Color integer|{r?: number, g?: number, b?: number, a?: number}
 ---@alias HyprLUI.Align "start"|"center"|"end"
 ---@alias HyprLUI.ZOrder "overlay"|"background"
+---@alias HyprLUI.Anchor "top-left"|"top"|"top-right"|"left"|"center"|"right"|"bottom-left"|"bottom"|"bottom-right"
+-- Same selector syntax as Hyprland's own window/layer rule `mon:` fields: a
+-- direction char, "+N"/"-N", a numeric id, or a static selector/output
+-- name - resolved relative to whichever monitor is focused right now,
+-- ONCE, at window-creation time. No "current"/"focused" keyword on
+-- purpose (it would shadow a monitor actually named "current" in the
+-- user's own config) - omit `monitor` entirely for "the focused monitor",
+-- and a selector that matches nothing also falls back to focused rather
+-- than erroring.
+---@alias HyprLUI.MonitorSelector string
 
 -- Fields shared by every widget constructor table. `x`/`y` are honored by
 -- Stack children (absolute positioning) and ignored by Row/Column children
@@ -54,6 +64,10 @@
 
 -- Top-level table passed to hyprlui.window{} - the [1] entry is the root
 -- widget (exactly one required: Stack/Row/Column/Text/Box).
+--
+-- Without `anchor`: x/y are a raw global (compositor-space) position.
+-- With `anchor`: x/y are reinterpreted as an offset from that point on
+-- the target monitor's usable box (positive always pushes inward).
 ---@class HyprLUI.WindowSpec
 ---@field name string
 ---@field x? number
@@ -61,6 +75,8 @@
 ---@field w? number
 ---@field h? number
 ---@field zorder? HyprLUI.ZOrder
+---@field anchor? HyprLUI.Anchor
+---@field monitor? HyprLUI.MonitorSelector
 ---@field [1] HyprLUI.WidgetSpec
 
 ---@class HyprLUI.API

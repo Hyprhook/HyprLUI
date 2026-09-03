@@ -5,14 +5,14 @@
 // A Canvas is a rectangular region on screen (screen-space, in pixels) that
 // owns and draws a single root Widget - a Lua script will typically create
 // one Canvas per GUI element it wants on screen (a HUD, a popup, a bar...)
-// via hl.plugin.hyprlui.window{...}. Renamed to "Window" once anchors +
-// monitor targeting land (DESIGN.md Phase 2) - for now it's still a plain
-// absolute-position box.
+// via hl.plugin.hyprlui.window{...}. Renamed to "Window" once exclusive
+// zones land (DESIGN.md Phase 5) - for now it's still just CCanvas.
 
 #include "Widget.hpp"
 
 #include <hyprland/src/helpers/math/Math.hpp>
 
+#include <optional>
 #include <string>
 
 namespace HyprLUI {
@@ -24,6 +24,21 @@ namespace HyprLUI {
     enum class EZOrder {
         Overlay,
         Background,
+    };
+
+    // Point on a monitor's usable box (logicalBoxMinusReserved() - i.e.
+    // excluding space already reserved by bars/panels) to anchor a
+    // window's corner/edge/center against. See CCanvas::setAnchor().
+    enum class EAnchor {
+        TopLeft,
+        Top,
+        TopRight,
+        Left,
+        Center,
+        Right,
+        BottomLeft,
+        Bottom,
+        BottomRight,
     };
 
     class CCanvas {
@@ -61,6 +76,30 @@ namespace HyprLUI {
             return m_position;
         }
 
+        // Anchors this window to a point on a monitor's usable box instead
+        // of a raw global position. `monitorName` is resolved ONCE by the
+        // caller (see LuaBridge.cpp's luaWindow(), which uses Hyprland's
+        // own monitor-selector syntax to pick it) and just stored here -
+        // recomputeAnchorPosition() re-looks-up that name every render()
+        // and recomputes m_position from the monitor's *current* box, so
+        // resolution/reserved-area changes on that monitor self-correct
+        // live, but which monitor was chosen never changes after the fact
+        // (no "window teleports when you focus a different screen").
+        // `offset` pushes inward from whichever edge(s) the anchor touches
+        // (top/right/bottom/left all use a positive offset to mean "move
+        // toward center") - for "center" it's a plain x/y nudge.
+        void setAnchor(EAnchor anchor, std::string monitorName, const Vector2D& offset) {
+            m_anchor        = anchor;
+            m_anchorMonitor = std::move(monitorName);
+            m_anchorOffset  = offset;
+        }
+
+        // No-op if no anchor is set. If the anchor's target monitor is
+        // currently unresolvable (unplugged since creation), keeps the
+        // last known m_position rather than snapping to (0,0) - known v1
+        // limitation, see DESIGN.md. Returns whether m_position changed.
+        bool recomputeAnchorPosition();
+
         void setSize(const Vector2D& size) {
             m_size = size;
         }
@@ -84,12 +123,15 @@ namespace HyprLUI {
         }
 
       private:
-        std::string m_name;
-        Vector2D    m_position;
-        Vector2D    m_size;
-        EZOrder     m_zorder;
-        bool        m_visible = true;
-        PWidget     m_root;
+        std::string            m_name;
+        Vector2D               m_position;
+        Vector2D               m_size;
+        EZOrder                m_zorder;
+        bool                   m_visible = true;
+        PWidget                m_root;
+        std::optional<EAnchor> m_anchor;
+        std::string            m_anchorMonitor;
+        Vector2D               m_anchorOffset;
     };
 
     using PCanvas = std::shared_ptr<CCanvas>;

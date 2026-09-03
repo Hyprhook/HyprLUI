@@ -231,8 +231,44 @@ piece (raw-keysym limitation).
       `add_text`/absolute-x,y-per-canvas API is gone, replaced outright
       (pre-release, no back-compat kept - see LuaBridge.hpp for the new
       shape). `align` supports start/center/end only; no justify/wrap.
-- [ ] **Phase 2** - Window anchors + explicit/focused monitor targeting
-      (replaces raw global `x`/`y`).
+- [x] **Phase 2** - Window anchors + explicit/focused monitor targeting.
+      `window{}` kept raw global `x`/`y` as an escape hatch (no `anchor`
+      given - unchanged Phase 1 behavior) rather than replacing it; when
+      `anchor` *is* given, x/y are reinterpreted as an offset from that
+      anchor point instead of a global position (positive always pushes
+      inward, regardless of which edge) - the same "relative to parent"
+      convention a widget's x/y already has relative to its parent widget,
+      just one level up. `monitor` is optional and reuses Hyprland's own
+      window/layer-rule `mon:` selector syntax (`State::CMonitorQuery::
+      configString()`, `src/state/MonitorQueryCore.cpp:196`
+      `fromConfigString()`) via `.relativeTo(Desktop::focusState()->
+      monitor())`, so `"+1"`/direction chars/numeric ids resolve relative
+      to focus - not a bespoke selector language. **Deliberately no
+      `"current"`/`"focused"` keyword**: `fromConfigString()` treats the
+      literal string `"current"` as a magic alias for whatever
+      `.relativeTo()` was given, which would shadow an actual monitor a
+      user has genuinely named "current" in their own `monitor{}` rules -
+      caught during implementation and corrected. So: omitting `monitor`
+      entirely means "the focused monitor", and if a given selector
+      matches nothing (typo, unplugged output), it falls back to the
+      focused monitor too rather than erroring - graceful degradation over
+      a hard failure for something this recoverable. The monitor is
+      resolved **once**, at creation (`luaWindow()` in `LuaBridge.cpp`),
+      and only its *name* is cached on `CCanvas` (`m_anchorMonitor`) -
+      never a `PHLMONITOR` handle, to sidestep any lifetime questions
+      across frames. Anchoring is against `logicalBoxMinusReserved()`
+      (`Monitor.cpp:1810`), not the raw monitor box, so anchored windows
+      already avoid existing bars/panels for free, ahead of Phase 5.
+      `CCanvas::recomputeAnchorPosition()` re-resolves that cached name and
+      recomputes position every `render()` call (same "just redo it every
+      frame, no dirty flag" philosophy as Phase 1's layout) - so
+      resolution/reserved-area changes on the chosen monitor self-correct
+      live, but *which* monitor was picked never changes after creation
+      (no window-teleports-on-focus-change surprise - this was an explicit
+      user call, see Open questions below for the alternative). If the
+      target monitor briefly can't be resolved (unplugged), the window
+      just keeps its last known position - no monitor-hotplug event
+      listener yet, known v1 gap.
 - [ ] **Phase 3** - Named watchers + `Bind()` reactivity (poll + explicit
       `notify()`).
 - [ ] **Phase 4** - `Button` widget + pointer input hook (`InputHook`) +
@@ -262,3 +298,14 @@ piece (raw-keysym limitation).
   fine for Phase 1's demo-sized content; per-side padding
   (`{top=, right=, bottom=, left=}`) is a small, backwards-compatible
   addition whenever a real layout needs it.
+- ~~Should an anchored window's monitor be resolved once at creation, or
+  tracked live?~~ - resolved for Phase 2: once, at creation (explicit user
+  call) - a HUD you already have open won't jump to a different screen
+  just because you focused a window there. A live-follow-focus mode (an
+  anchored window always tracking "whichever monitor is focused right
+  now") is a legitimate alternative some users may want (e.g. a volume
+  popup that should always show on the active screen) - if it comes up,
+  it's a small, additive change: reuse the exact same `configString`
+  resolution in `recomputeAnchorPosition()` instead of a cached name, gated
+  behind something like `monitor = "focused-live"` so it doesn't change
+  today's default behavior.
