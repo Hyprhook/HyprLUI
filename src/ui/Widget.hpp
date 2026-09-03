@@ -81,6 +81,28 @@ namespace HyprLUI {
             return nullptr;
         }
 
+        // Finds the topmost interactive widget whose bounds contain
+        // `point`, searching this widget's subtree. `origin` is this
+        // widget's PARENT's already-accumulated absolute position (same
+        // convention as render()'s origin parameter). Default: not
+        // interactive itself, just recurse into children - later/topmost-
+        // painted children are checked first so an overlapping later
+        // sibling wins. Only ButtonWidget.hpp overrides this to actually
+        // match (return `this`) - everything else stays a pure pass-
+        // through search, so clicking a HUD's background/label doesn't
+        // swallow the click, only clicking an actual Button does.
+        virtual CWidget* hitTest(const Vector2D& origin, const Vector2D& point) {
+            if (!m_visible)
+                return nullptr;
+
+            const Vector2D absOrigin = origin + m_position;
+            for (auto it = m_children.rbegin(); it != m_children.rend(); ++it) {
+                if (auto* hit = (*it)->hitTest(absOrigin, point))
+                    return hit;
+            }
+            return nullptr;
+        }
+
         // Recursive removal by id, starting from this widget's children.
         // Returns true if something was removed.
         bool removeChild(const std::string& id) {

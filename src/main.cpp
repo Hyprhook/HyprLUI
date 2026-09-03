@@ -16,6 +16,9 @@
 #include "ui/ContainerWidget.hpp"
 #include "ui/RectNode.hpp"
 #include "ui/TextNode.hpp"
+#include "reactive/Watcher.hpp"
+#include "input/InputHook.hpp"
+#include "reserved/ReservedAreaComposer.hpp"
 
 // Do NOT change this function.
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
@@ -70,6 +73,32 @@ namespace {
         return 0;
     }
 
+    // Tears down every canvas/watcher/exclusive-zone contribution HyprLUI
+    // currently owns. Used both at PLUGIN_EXIT (don't leave anything
+    // behind after unload) and right before a config reload re-parses the
+    // Lua script from scratch (see the config.preReload listener in
+    // PLUGIN_INIT below).
+    //
+    // Why the reload case matters: the plugin itself is NOT unloaded/
+    // reloaded when the Lua config reloads - only the script gets re-run.
+    // So without this, HyprLUI's C++-side state would silently outlive
+    // the Lua-side bookkeeping (local variables tracking "is this window
+    // open", etc.) that's supposed to own it - confirmed live: toggling a
+    // window open, then reloading (e.g. fixing an unrelated config eval
+    // error, which forces exactly this), left the window open in C++
+    // while the Lua toggle variable that tracked it reset to "closed" on
+    // re-run - permanently orphaning it, no way to reference it again
+    // through that keybind. Clearing everything right before the fresh
+    // script runs means it starts from the same blank slate the Lua
+    // script's own reset locals already assume, matching how Hyprland's
+    // own config-driven state (binds, window rules) already behaves
+    // across a reload.
+    void resetAllState() {
+        HyprLUI::CWatcherManager::get().clear();
+        HyprLUI::CUIManager::get().clear();
+        HyprLUI::CReservedAreaComposer::get().clear();
+    }
+
 } // namespace
 
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
@@ -101,6 +130,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     HyprlandAPI::addConfigValueV2(Global::PHANDLE, makeShared<Config::Values::CBoolValue>("plugin:hyprlui:enabled", "Whether HyprLUI is active.", true));
 
     HyprLUI::RenderHook::registerHooks(Global::PHANDLE);
+    HyprLUI::InputHook::registerHooks(Global::PHANDLE);
+    HyprLUI::CReservedAreaComposer::get().registerHooks(Global::PHANDLE);
+
+    // See resetAllState()'s doc comment - config.preReload fires as the
+    // very first thing inside CConfigManager::reload(), strictly before
+    // any re-parsing begins (ConfigManager.cpp:647-648), so clearing here
+    // can never wipe out anything the fresh script is about to create.
+    static auto preReload = Event::bus()->m_events.config.preReload.listen([]() { resetAllState(); });
 
     // NOTE: addDispatcher/addDispatcherV2 are stubbed out (always return
     // false) on this Hyprland dev snapshot - the old string-keyed dispatcher
@@ -123,7 +160,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
-    HyprLUI::CUIManager::get().clear();
+    resetAllState();
+    HyprLUI::CReservedAreaComposer::get().unregisterHooks(Global::PHANDLE);
+    HyprLUI::InputHook::unregisterHooks(Global::PHANDLE);
     HyprLUI::RenderHook::unregisterHooks(Global::PHANDLE);
     HyprlandAPI::removeLuaFunction(Global::PHANDLE, "hyprlui", "demo");
     HyprLUI::Lua::unregisterFunctions(Global::PHANDLE);

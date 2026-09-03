@@ -22,6 +22,27 @@
 -- than erroring.
 ---@alias HyprLUI.MonitorSelector string
 
+-- Requires `anchor` (a reserved zone needs a resolved target monitor),
+-- and must be an edge the anchor actually touches - anchor="top" only
+-- accepts "top"; a corner anchor like "top-left" accepts "top" or
+-- "left"; "center" accepts neither. Errors otherwise. Reserves screen-
+-- edge space equal to the window's own current size along the
+-- perpendicular axis (top/bottom -> height, left/right -> width) - see
+-- LuaBridge.hpp for composition/limitation details.
+---@alias HyprLUI.Edge "top"|"right"|"bottom"|"left"
+
+-- The marker table hyprlui.Bind(name) returns - ties a widget property to
+-- watcher `name`'s current value. Opaque; just pass it straight through
+-- as a field's value (e.g. Text{ text = Bind("volume") }).
+---@class HyprLUI.BindMarker
+---@field __bind string
+
+---@class HyprLUI.WatchOptions
+---@field interval? number
+
+---@alias HyprLUI.WatcherFn fun(): any
+---@alias HyprLUI.WatchFn fun(name: string, fn: HyprLUI.WatcherFn, opts?: HyprLUI.WatchOptions): nil
+
 -- Fields shared by every widget constructor table. `x`/`y` are honored by
 -- Stack children (absolute positioning) and ignored by Row/Column children
 -- (arrange() overwrites them). Numeric entries ([1], [2], ...) are child
@@ -40,7 +61,7 @@
 ---@field rounding? integer
 
 ---@class HyprLUI.TextSpec : HyprLUI.WidgetCommon
----@field text string
+---@field text string|HyprLUI.BindMarker
 ---@field size? integer
 ---@field color? HyprLUI.Color
 ---@field font? string
@@ -60,7 +81,56 @@
 ---@field padding? number
 ---@field align? HyprLUI.Align
 
----@alias HyprLUI.WidgetSpec HyprLUI.BoxSpec|HyprLUI.TextSpec|HyprLUI.StackSpec|HyprLUI.FlexSpec
+---@alias HyprLUI.OnClickFn fun()
+---@alias HyprLUI.OnFocusFn fun()
+---@alias HyprLUI.OnBlurFn fun()
+-- `keysym` is an xkb_keysym_t (already layout/shift-aware - see
+-- LuaBridge.hpp) - compare against xkbcommon's XKB_KEY_* integer values.
+-- `pressed` is true on key-down, false on key-up.
+---@alias HyprLUI.OnKeyFn fun(keysym: integer, pressed: boolean)
+-- Fires with an Input's new text after it changes from typing/Backspace -
+-- not from a programmatic set_input_text() call.
+---@alias HyprLUI.OnChangeFn fun(text: string)
+
+-- Like Box, but clickable (left-click only, v1) - see LuaBridge.hpp for
+-- press/release/pass-through semantics. Children are positioned manually/
+-- absolutely inside it, same as Stack.
+---@class HyprLUI.ButtonSpec : HyprLUI.WidgetCommon
+---@field w number
+---@field h number
+---@field color? HyprLUI.Color
+---@field rounding? integer
+---@field onClick? HyprLUI.OnClickFn
+
+-- A focusable rectangle that behaves like an actual text field by default
+-- - typing appends a character, Backspace removes the last one, current
+-- text renders automatically (see LuaBridge.hpp) - printable-ASCII only,
+-- no cursor/selection/IME/non-ASCII/clipboard; layer that on top of onKey
+-- if needed, which keeps firing for every key regardless. Gains HyprLUI's
+-- single global keyboard-focus slot by being clicked (grabbed on press)
+-- or via focus_widget(); loses it by clicking elsewhere, or blur_widget().
+-- A key that currently triggers a real Hyprland keybind never reaches a
+-- focused Input at all (not just "not swallowed" - never forwarded to
+-- onKey or the built-in capture either), so the user's keybinds behave
+-- exactly as if HyprLUI didn't exist - this is absolute, no widget-level
+-- opt-out. Everything else is swallowed while focused, so typing stays
+-- local instead of leaking to whatever real window has actual keyboard
+-- focus behind it.
+---@class HyprLUI.InputSpec : HyprLUI.WidgetCommon
+---@field w number
+---@field h number
+---@field color? HyprLUI.Color
+---@field rounding? integer
+---@field text? string
+---@field textColor? HyprLUI.Color
+---@field textSize? integer
+---@field textFont? string
+---@field onChange? HyprLUI.OnChangeFn
+---@field onKey? HyprLUI.OnKeyFn
+---@field onFocus? HyprLUI.OnFocusFn
+---@field onBlur? HyprLUI.OnBlurFn
+
+---@alias HyprLUI.WidgetSpec HyprLUI.BoxSpec|HyprLUI.TextSpec|HyprLUI.StackSpec|HyprLUI.FlexSpec|HyprLUI.ButtonSpec|HyprLUI.InputSpec
 
 -- Top-level table passed to hyprlui.window{} - the [1] entry is the root
 -- widget (exactly one required: Stack/Row/Column/Text/Box).
@@ -77,6 +147,7 @@
 ---@field zorder? HyprLUI.ZOrder
 ---@field anchor? HyprLUI.Anchor
 ---@field monitor? HyprLUI.MonitorSelector
+---@field exclusive? HyprLUI.Edge
 ---@field [1] HyprLUI.WidgetSpec
 
 ---@class HyprLUI.API
@@ -86,10 +157,19 @@
 ---@field Column fun(spec: HyprLUI.FlexSpec): HyprLUI.FlexSpec
 ---@field Text fun(spec: HyprLUI.TextSpec): HyprLUI.TextSpec
 ---@field Box fun(spec: HyprLUI.BoxSpec): HyprLUI.BoxSpec
+---@field Button fun(spec: HyprLUI.ButtonSpec): HyprLUI.ButtonSpec
+---@field Input fun(spec: HyprLUI.InputSpec): HyprLUI.InputSpec
 ---@field remove_canvas fun(name: string): nil
 ---@field set_canvas_visible fun(name: string, visible: boolean): nil
 ---@field set_text fun(window: string, id: string, text: string): nil
+---@field set_input_text fun(window: string, id: string, text: string): nil
+---@field get_input_text fun(window: string, id: string): string
 ---@field remove_widget fun(window: string, id: string): nil
+---@field watch HyprLUI.WatchFn
+---@field notify fun(name: string): nil
+---@field Bind fun(name: string): HyprLUI.BindMarker
+---@field focus_widget fun(window: string, id: string): nil
+---@field blur_widget fun(): nil
 
 ---@type HyprLUI.API
 ---@diagnostic disable-next-line: missing-fields

@@ -79,6 +79,7 @@ namespace HyprLUI::gfx {
 
     void damageBox(const CBox& box) {
         g_pHyprRenderer->damageBox(box);
+        g_pHyprRenderer->damageBox(box);
     }
 
 } // namespace HyprLUI::gfx
