@@ -7,6 +7,7 @@
 #include "InputWidget.hpp"
 #include "ImageWidget.hpp"
 #include "CheckboxWidget.hpp"
+#include "ComponentRegistry.hpp"
 #include "../reactive/Watcher.hpp"
 #include "../reserved/ReservedAreaComposer.hpp"
 
@@ -30,6 +31,7 @@ extern "C" {
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace HyprLUI::Lua {
@@ -402,9 +404,17 @@ namespace HyprLUI::Lua {
         // but still valid tree nodes (e.g. a decorative Box). `bindings`
         // collects one closure per hyprlui.Bind()-tagged field found -
         // luaWindow() attaches them to the finished CCanvas once it exists
-        // (a widget is built long before its owning canvas is).
+        // (a widget is built long before its owning canvas is). `seenIds`
+        // is a per-window set checked against every resolved id (explicit
+        // or auto-generated) - a duplicate is a hard error (Phase 9,
+        // DESIGN.md): previously silent (findWidget() just returns the
+        // first match, so set_text()/remove_widget()/etc. on the second
+        // widget silently landed on the first one instead), which is
+        // exactly the failure mode hyprlui.Component()'s own id-rewriting
+        // exists to avoid for its own instances - this closes the same
+        // gap for hand-written duplicate ids too, not just component ones.
 
-        PWidget buildWidget(lua_State* L, int idx, int& autoId, std::vector<std::function<void()>>& bindings) {
+        PWidget buildWidget(lua_State* L, int idx, int& autoId, std::vector<std::function<void()>>& bindings, std::unordered_set<std::string>& seenIds) {
             idx = lua_absindex(L, idx);
             luaL_checktype(L, idx, LUA_TTABLE);
 
@@ -419,6 +429,12 @@ namespace HyprLUI::Lua {
             std::string id = optFieldString(L, idx, "id", "");
             if (id.empty())
                 id = "__auto" + std::to_string(autoId++);
+
+            if (!seenIds.insert(id).second)
+                luaL_error(L,
+                           "hyprlui: duplicate widget id '%s' in the same window - ids must be unique within a window (set_text/remove_widget/etc. address a widget by id and only "
+                           "ever find the first match)",
+                           id.c_str());
 
             const double x       = fieldNumber(L, idx, "x", 0);
             const double y       = fieldNumber(L, idx, "y", 0);
@@ -633,7 +649,7 @@ namespace HyprLUI::Lua {
             for (lua_Integer i = 1; i <= static_cast<lua_Integer>(n); ++i) {
                 lua_rawgeti(L, idx, i);
                 if (lua_istable(L, -1))
-                    widget->addChild(buildWidget(L, lua_gettop(L), autoId, bindings));
+                    widget->addChild(buildWidget(L, lua_gettop(L), autoId, bindings, seenIds));
                 lua_pop(L, 1);
             }
 
@@ -739,11 +755,12 @@ namespace HyprLUI::Lua {
             PWidget                            root;
             int                                autoId = 0;
             std::vector<std::function<void()>> bindings;
+            std::unordered_set<std::string>    seenIds;
             const auto                         n = lua_rawlen(L, 1);
             for (lua_Integer i = 1; i <= static_cast<lua_Integer>(n); ++i) {
                 lua_rawgeti(L, 1, i);
                 if (lua_istable(L, -1)) {
-                    root = buildWidget(L, lua_gettop(L), autoId, bindings);
+                    root = buildWidget(L, lua_gettop(L), autoId, bindings, seenIds);
                     lua_pop(L, 1);
                     break;
                 }
@@ -1078,6 +1095,50 @@ namespace HyprLUI::Lua {
             return 0;
         }
 
+        int luaDefineComponent(lua_State* L) {
+            const std::string name = luaL_checkstring(L, 1);
+            luaL_checktype(L, 2, LUA_TTABLE);
+
+            lua_getfield(L, 2, "props");
+            int schemaIdx = 0;
+            if (lua_istable(L, -1))
+                schemaIdx = lua_gettop(L); // left on the stack - defineComponent() reads it directly
+            else if (!lua_isnil(L, -1))
+                return luaL_error(L, "hyprlui.defineComponent('%s'): 'props' must be a table", name.c_str());
+            else
+                lua_pop(L, 1);
+
+            lua_getfield(L, 2, "render");
+            if (!lua_isfunction(L, -1))
+                return luaL_error(L, "hyprlui.defineComponent('%s'): missing required field 'render' (a function)", name.c_str());
+            const int renderFnRef = luaL_ref(L, LUA_REGISTRYINDEX); // pops the function
+
+            CComponentRegistry::get().defineComponent(L, name, schemaIdx, renderFnRef);
+
+            if (schemaIdx != 0)
+                lua_pop(L, 1); // pop the props table we left on the stack above
+            return 0;
+        }
+
+        int luaComponent(lua_State* L) {
+            const std::string name = luaL_checkstring(L, 1);
+
+            int               propsIdx = 0;
+            if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
+                luaL_checktype(L, 2, LUA_TTABLE);
+                propsIdx = 2;
+            }
+
+            int optsIdx = 0;
+            if (lua_gettop(L) >= 3 && !lua_isnil(L, 3)) {
+                luaL_checktype(L, 3, LUA_TTABLE);
+                optsIdx = 3;
+            }
+
+            CComponentRegistry::get().instantiate(L, name, propsIdx, optsIdx); // leaves exactly one widget-spec table on the stack
+            return 1;
+        }
+
     } // namespace
 
     void registerFunctions(HANDLE handle) {
@@ -1107,6 +1168,8 @@ namespace HyprLUI::Lua {
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "notify", &luaNotify);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "focus_widget", &luaFocusWidget);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "blur_widget", &luaBlurWidget);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "defineComponent", &luaDefineComponent);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "Component", &luaComponent);
     }
 
     void unregisterFunctions(HANDLE handle) {
@@ -1136,6 +1199,8 @@ namespace HyprLUI::Lua {
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "notify");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "focus_widget");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "blur_widget");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "defineComponent");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "Component");
     }
 
 } // namespace HyprLUI::Lua

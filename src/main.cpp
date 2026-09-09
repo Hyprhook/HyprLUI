@@ -19,6 +19,7 @@
 #include "reactive/Watcher.hpp"
 #include "input/InputHook.hpp"
 #include "reserved/ReservedAreaComposer.hpp"
+#include "ui/ComponentRegistry.hpp"
 
 // Do NOT change this function.
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
@@ -97,6 +98,11 @@ namespace {
         HyprLUI::CWatcherManager::get().clear();
         HyprLUI::CUIManager::get().clear();
         HyprLUI::CReservedAreaComposer::get().clear();
+        // hyprlui.defineComponent() calls are top-level config code too,
+        // re-run in full on every reload - without this, the fresh
+        // script's re-registration would immediately hit "already
+        // registered" against the stale entry from before the reload.
+        HyprLUI::CComponentRegistry::get().clear();
     }
 
 } // namespace

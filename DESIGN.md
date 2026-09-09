@@ -1346,23 +1346,139 @@ piece (raw-keysym limitation).
       ever gets picked up, it's a real chunk of new work (new dependency +
       new timer-driven animation pattern), not a small extension of the
       existing `Image{}` code path.
-- [ ] **Phase 9** - Widget composability. **Open design question, not yet
-      solved** - flagged here so it doesn't get lost, not because an
-      implementation plan exists yet. Today, building a widget once and
-      storing it in a Lua variable means every reuse of that variable
-      references the *same* instance, not a fresh one per use - there's no
-      component/template concept, just tree-construction calls that return
-      concrete widget objects. Likely direction: wrap widget construction
-      in a plain Lua function that returns a fresh tree per call (similar
-      to a React component or a QML custom type) rather than adding a new
-      first-class "component" primitive to the API surface itself - but
-      this needs real design work before implementation: how props/
-      children get passed in, whether per-call `id` collisions need
-      solving (every widget still needs a stable Lua `id` for the existing
-      free-function-by-id mutation style), and how it interacts with
-      `Bind()`. Blocks nothing else, but worth resolving before Phase 8's
-      new widgets accumulate more copy-pasted construction code in real
-      configs.
+- [x] **Phase 9** - Widget composability: `hyprlui.defineComponent(name,
+      { props?, render })` registers a reusable, string-referenced widget
+      template (in any file - it's a plain Lua-callable function, so
+      `require()`ing a module that calls it is all "cross-file" needs);
+      `hyprlui.Component(name, props?, opts?)` instantiates one.
+
+      **First round of analysis (before the user weighed in) undersold the
+      problem**: the initial framing was "does reusing a widget variable
+      give you a fresh instance?" - investigation showed `buildWidget()`
+      already constructs a fresh `CWidget` every time it runs on a spec
+      table, so a plain Lua function returning a fresh table literal per
+      call already gave "fresh instance per call," and `Bind()` already
+      composed correctly through it (each call's binding closures capture
+      their own widget pointers independently). An initial 3-question
+      AskUserQuestion round framed around that narrower analysis was
+      rejected - **the user wanted something closer to a real component
+      system**: definitions in a separate file, registration, a validated
+      props schema with defaults, and instantiation by STRING reference
+      (not by holding a Lua function value) - closer to a Vue component
+      than a bare closure. Re-scoped around that instead.
+
+      **Design, worked out in a written proposal and confirmed before
+      implementing** (same "propose the mechanics and scoping rules
+      explicitly, get confirmation, then build" practice as every
+      contested design decision this project has made):
+      - `render(props)` is a plain Lua function returning exactly one
+        widget (the direct result of a single existing widget-constructor
+        call) - no new construction primitive needed *inside* it, it's
+        ordinary tree-building code.
+      - **Scoping, the part explicitly flagged as needing real answers**:
+        `render` is an ordinary Lua closure - anything it captures from
+        OUTSIDE itself is a normal Lua upvalue, SHARED across every
+        instance of that component everywhere (a module-level variable,
+        not per-instance state). There is no re-render cycle in this
+        system at all (`render()` runs once, at `Component()`-call time,
+        same as any other widget constructor) and deliberately no React/
+        Vue-style per-instance component state mechanism - state after
+        construction lives either in the widget tree itself (mutate-by-id,
+        same as everything else already works) or in ordinary Lua
+        variables the config author manages themselves. Stated explicitly
+        as a documented gotcha (LuaBridge.hpp, ComponentRegistry.hpp)
+        rather than left implicit, since it's the single most likely
+        source of confusion for someone coming from a real frontend
+        framework's component model.
+      - **The actual bug this closes**: not "instances aren't fresh" (they
+        already were) but that a component's internally-hardcoded ids
+        (e.g. always `id = "label"`) collide across every instance beyond
+        the first - previously silent (`findWidget()` just returns the
+        first match), so the 2nd/3rd/... instance's mutations silently
+        landed on the 1st forever. Solved by auto-rewriting every explicit
+        id in `render()`'s output: the ROOT's own id becomes exactly the
+        instance's `key` (`opts.key` if given, else an auto-generated
+        `name#N`); every DESCENDANT's explicit id becomes
+        `key .. "::" .. originalId`. A component author can safely reuse
+        the same ids in every call - the rewritten ids are always unique
+        per instance by construction. Root-gets-bare-key (not
+        `key::rootId`) was a deliberate choice so the whole instance stays
+        addressable with just the key (`remove_widget(win, key)`), not
+        also requiring the caller to know whatever id the author happened
+        to give the root internally.
+      - `opts` (third arg) carries the same base widget fields (x/y/
+        padding/opacity/debug/etc.) every other widget already accepts at
+        its own call site, overlaid onto the root after `render()`
+        returns - so a component's `render()` never needs to hardcode or
+        forward its own position; that stays purely the caller's concern,
+        consistent with every other widget in this toolkit. `opts.key`
+        sets the instance key explicitly (consumed here, never copied onto
+        the root as an actual widget field); every other `opts` field is
+        copied onto the root generically (not restricted to a fixed
+        WidgetCommon field-name whitelist), so this doesn't need updating
+        every time a future phase adds a new base widget property.
+      - Unknown props (not in the schema) are a hard error, same class as
+        a missing required one - schema is parsed ONCE at
+        `defineComponent()` time into a C++-side map, not re-validated
+        against a raw Lua table on every `Component()` call (both for
+        safety - see the `lua_next` note below - and because a component
+        instantiated in a loop shouldn't re-pay Lua-table schema-walking
+        cost per iteration).
+      - A `render()` that errors, or doesn't return a single tagged
+        widget-spec table, propagates as a real build-time failure
+        (`lua_call`, not `lua_pcall`) - same failure class as a missing
+        required field on any other widget (this runs synchronously during
+        tree construction), deliberately NOT caught-and-logged like
+        `onClick`/`onChange` (those fire from input-handling contexts with
+        no caller-side pcall of their own - `Component()` isn't one).
+
+      New `src/ui/ComponentRegistry.hpp/.cpp` (`CComponentRegistry`
+      singleton, mirrors `CWatcherManager`'s shape - a named,
+      `lua_State*`-owning, Lua-callback-backed registry) - doesn't touch
+      the widget tree or `CWidget` at all. `instantiate()` resolves
+      entirely at the Lua-table level (validate props, call `render()`,
+      rewrite ids, overlay `opts`) and leaves an ORDINARY already-
+      `__type`-tagged widget-spec table on the stack, indistinguishable
+      from calling `hyprlui.Box{}` directly - so `LuaBridge.cpp`'s
+      `buildWidget()` needed ZERO changes to handle a `Component()`'d
+      subtree; it just recurses into it like any other child.
+
+      **First-ever use of `lua_next` (generic Lua table iteration) in this
+      codebase** - every previous field read anywhere in `LuaBridge.cpp`
+      reads a specific, known-in-advance field name via `lua_getfield`.
+      Needed here three times (walking an author-defined props schema's
+      keys at `defineComponent()` time; checking a caller's `props` table
+      for keys not in the schema; copying every `opts` field generically
+      onto the root) since prop/opts field names aren't known in advance.
+      Traced the stack-balance of every branch by hand before trusting
+      it (the Lua manual's specific hazard - calling `lua_tolstring` on a
+      non-string key mutates it in place and corrupts an in-progress
+      traversal - is avoided throughout by always checking `lua_type(...)
+      == LUA_TSTRING` before ever calling `lua_tostring` on a `lua_next`
+      key, and non-string keys are silently skipped rather than crashing
+      the traversal).
+
+      **New general win, not specific to `Component()`**: `buildWidget()`
+      now hard-errors on ANY duplicate explicit `id` reused twice within
+      one `window{}` tree, threaded through its recursion as a new
+      `std::unordered_set<std::string>& seenIds` parameter (alongside the
+      existing `autoId`/`bindings`). This was previously silent everywhere
+      in this toolkit, not just for components (`findWidget()` always just
+      returns the first match) - and closes the one residual gap the
+      per-instance key-rewriting above doesn't: two children INSIDE one
+      `render()` call's own output both explicitly reusing the same id
+      (e.g. two children both `id = "label"`) still collide after
+      rewriting (both become `key::label`) - now caught immediately as a
+      build-time error instead of silently misdirecting mutations, for
+      hand-written trees and component output alike.
+
+      **Deliberately out of v1 scope**: no slots/children-passthrough
+      (Vue's `<slot>`) - `render(props)` only ever gets data via `props`,
+      never positional child widgets from the call site. Nothing in the
+      motivating use case needed it; additive later if a real need shows
+      up (would need render() to accept and re-splice caller-supplied
+      children into a placeholder position in its own output, real added
+      complexity).
 - [ ] **Phase 10** - Interactive widget layer. Sits above Phase 7's base
       properties and applies only to the subset of widgets that are
       actually interactive (`Button`, `Input`, and `Checkbox` once Phase 8

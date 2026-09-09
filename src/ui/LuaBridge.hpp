@@ -231,6 +231,110 @@
 //     set_text()/set_input_text() use elsewhere). onChange errors are
 //     caught and logged, not propagated, same as onClick.
 //
+// Composability (Phase 9, DESIGN.md):
+//
+//   defineComponent(name, { props?, render })
+//     Registers a reusable widget template under the string `name` -
+//     defining it doesn't have to happen in the same file it's used from,
+//     since this is just a plain Lua-callable function (require() a
+//     module that calls it, same as any other Lua code). Errors if `name`
+//     is already registered.
+//
+//     `props` (optional) is a schema table: each entry is either
+//     `{ required = true }` (must be given at every Component() call) or
+//     `{ default = value }` (optional - falls back to `value` if omitted;
+//     `value` can be any Lua type, including a table or function). A prop
+//     can't be both required and have a default. Passing a prop at
+//     Component() time that isn't in the schema is an error (typo
+//     protection), same "fail loud on developer mistakes" convention used
+//     everywhere else in this file.
+//
+//     `render` is a plain Lua function `function(props) ... end` that
+//     returns EXACTLY ONE widget (the direct result of a single
+//     hyprlui.Box{}/hyprlui.Column{}/etc. call, i.e. the same shape any
+//     widget constructor already returns) - it's ordinary tree-building
+//     code, nothing new to learn beyond what every other widget example
+//     in this file already does. Runs once per Component() call, not on
+//     any kind of re-render/update cycle - there is no React/Vue-style
+//     per-instance component state in this system. Anything `render`
+//     closes over from OUTSIDE itself (a `local` above it in its
+//     defining file) is an ordinary Lua upvalue: SHARED across every
+//     instance of that component everywhere, exactly like a module-level
+//     variable - not per-instance state. If render() errors, or doesn't
+//     return a single tagged widget table, that propagates as a real
+//     build-time failure (not caught/logged like onClick/onChange - this
+//     runs synchronously during tree construction, same failure class as
+//     a missing required field on any other widget).
+//
+//   Component(name, props?, opts?)
+//     Instantiates a registered component - validates `props` against
+//     its schema (applying defaults, erroring on anything missing/
+//     unknown), calls render(validatedProps), and returns an ordinary
+//     tagged widget-spec table - slots into a parent's children exactly
+//     like hyprlui.Box{}/etc. would, so it composes with everything else
+//     in this file for free (nesting, Row/Column, Stack, other
+//     Component() calls, ...).
+//
+//     Every explicit `id` set inside render()'s returned subtree is
+//     rewritten to be collision-free per instance: the ROOT widget's own
+//     id becomes exactly the instance key (see `opts.key` below); every
+//     DESCENDANT's explicit id becomes `key .. "::" .. originalId`. A
+//     component author can safely reuse the same ids across every call
+//     (e.g. always `id = "label"` for the inner text) - the actual final
+//     ids are always unique per instance. Duplicate ids WITHIN one
+//     render() call's own output (e.g. two children both explicitly
+//     `id = "label"`) are still a hard error, same as anywhere else in a
+//     window{} tree (see below).
+//
+//     `opts` (optional) is a table of the same base widget fields every
+//     other widget already accepts at its own call site - x/y, padding,
+//     margin, opacity, zIndex, visible, debug/debugShow, etc. - overlaid
+//     onto the rendered root AFTER render() returns, so a component's own
+//     render() doesn't need to hardcode or forward its own position;
+//     that stays purely the caller's concern, same as everywhere else in
+//     this toolkit. `opts.key` (string) sets the instance key explicitly
+//     - needed if you want to address this specific instance from
+//     outside later (e.g. `remove_widget(window, key)` for the whole
+//     instance, or `set_text(window, key .. "::label", ...)` for a piece
+//     inside it). Without an explicit key, one is auto-generated
+//     (`name .. "#" .. N`) - fine for a component you'll never need to
+//     address again by id (e.g. most items in a list), not something to
+//     rely on being predictable.
+//
+//     Example - a labeled button used twice, each independently
+//     addressable via its own key:
+//
+//       hyprlui.defineComponent("LabeledButton", {
+//           props = {
+//               label = { required = true },
+//               color = { default = 0x333333 },
+//               onClick = { required = false },
+//           },
+//           render = function(props)
+//               return hyprlui.Button({
+//                   id = "btn", w = 120, h = 32, color = props.color, onClick = props.onClick,
+//                   hyprlui.Text({ id = "label", text = props.label }),
+//               })
+//           end,
+//       })
+//
+//       hyprlui.window{
+//           name = "toolbar", anchor = "top",
+//           hyprlui.Row{ gap = 8,
+//               hyprlui.Component("LabeledButton", { label = "Save", onClick = saveFn }, { key = "save_btn" }),
+//               hyprlui.Component("LabeledButton", { label = "Cancel" }, { key = "cancel_btn" }),
+//           },
+//       }
+//
+//     -- later: set_text("toolbar", "save_btn::label", "Saving...")
+//
+// Every window{} tree also rejects a plain duplicate id outright (not
+// just the Component()-instance case above) - reusing the same explicit
+// `id` twice anywhere in one window{} call is a hard error at build time.
+// Previously silent: findWidget() just returns the first match, so a
+// second/third widget sharing an id was permanently unreachable by
+// set_text()/remove_widget()/etc. with no signal anything was wrong.
+//
 // Reactivity:
 //
 //   watch(name, fn, opts?)

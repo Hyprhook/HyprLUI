@@ -238,6 +238,29 @@
 
 ---@alias HyprLUI.WidgetSpec HyprLUI.BoxSpec|HyprLUI.TextSpec|HyprLUI.StackSpec|HyprLUI.FlexSpec|HyprLUI.ButtonSpec|HyprLUI.InputSpec|HyprLUI.ImageSpec|HyprLUI.DividerSpec|HyprLUI.CheckboxSpec
 
+-- Either `{ required = true }` (must be given at every Component() call)
+-- or `{ default = value }` (falls back to `value`, any Lua type, if
+-- omitted) - never both.
+---@class HyprLUI.PropSpec
+---@field required? boolean
+---@field default? any
+
+-- Registered via hyprlui.defineComponent(name, def) - see LuaBridge.hpp
+-- for the full composability model (id-rewriting per instance, opts
+-- overlay, scoping/upvalue rules). `render` returns exactly one widget
+-- (the direct result of a single widget-constructor call).
+---@class HyprLUI.ComponentDef
+---@field props? table<string, HyprLUI.PropSpec>
+---@field render fun(props: table): HyprLUI.WidgetSpec
+
+-- Third argument to hyprlui.Component() - the same base widget fields
+-- every other widget accepts at its own call site (x/y/padding/opacity/
+-- etc., inherited from WidgetCommon), plus `key`: the instance key
+-- (unprefixed root id; every descendant's explicit id becomes
+-- `key .. "::" .. originalId`). Auto-generated if omitted.
+---@class HyprLUI.ComponentOpts : HyprLUI.WidgetCommon
+---@field key? string
+
 -- Top-level table passed to hyprlui.window{} - the [1] entry is the root
 -- widget (exactly one required: Stack/Row/Column/Text/Box).
 --
@@ -268,6 +291,8 @@
 ---@field Image fun(spec: HyprLUI.ImageSpec): HyprLUI.ImageSpec
 ---@field Divider fun(spec: HyprLUI.DividerSpec): HyprLUI.DividerSpec
 ---@field Checkbox fun(spec: HyprLUI.CheckboxSpec): HyprLUI.CheckboxSpec
+---@field defineComponent fun(name: string, def: HyprLUI.ComponentDef): nil
+---@field Component fun(name: string, props?: table, opts?: HyprLUI.ComponentOpts): HyprLUI.WidgetSpec
 ---@field remove_canvas fun(name: string): nil
 ---@field set_canvas_visible fun(name: string, visible: boolean): nil
 ---@field set_widget_visible fun(window: string, id: string, visible: boolean): nil

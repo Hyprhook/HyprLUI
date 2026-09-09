@@ -674,6 +674,113 @@ hl.bind("ALT + SHIFT + G", function()
 	end
 end, { description = "HyprLUI: toggle the widget catalog (Image/Divider/Checkbox) test window" })
 
+--------------------------------------------------
+---- HYPRLUI COMPONENTS TEST (Phase 9) ----
+--------------------------------------------------
+-- Exercises hyprlui.defineComponent()/hyprlui.Component() (DESIGN.md
+-- Phase 9): a single "LabeledButton" template registered once, then
+-- instantiated five times in the same window - twice with an explicit
+-- `key` (independently addressable afterwards, see the onClick below),
+-- three times with no key at all (auto-generated "LabeledButton#N",
+-- exercising the no-explicit-key path). Every instance reuses the exact
+-- same internal ids ("btn"/"label") inside render() - id-rewriting is
+-- what keeps all five from colliding with each other.
+
+local HYPRLUI_COMPONENTS_WINDOW = "hyprlui_components_test"
+local hyprluiComponentsWindowOpen = false
+local hyprluiSaveClicks = 0
+
+-- Unlike every hl.plugin.hyprlui.* call elsewhere in this file (always
+-- inside a bind's callback, so it only ever actually runs once the user
+-- presses a key - long after the plugin has loaded), defineComponent()
+-- needs to run once at top level, during the script's own initial
+-- evaluation. On first boot that evaluation happens BEFORE the plugin has
+-- finished loading (see the hl.plugin.hyprlui ~= nil check near the top
+-- of this file for the same gap) - hl.plugin.hyprlui is still nil then,
+-- so an unguarded call here throws "attempt to index a nil value (field
+-- 'hyprlui')". Harmless and self-correcting even unguarded (main.cpp's
+-- PLUGIN_INIT calls HyprlandAPI::reloadConfig() right after registering
+-- the plugin's functions, which re-runs this whole script a second time
+-- with hl.plugin.hyprlui now populated) - but the same nil-check used
+-- above avoids the spurious error being logged in the meantime.
+if hl.plugin.hyprlui ~= nil then
+	hl.plugin.hyprlui.defineComponent("LabeledButton", {
+		props = {
+			label = { required = true },
+			color = { default = 0x33333333 },
+			onClick = { required = false },
+		},
+		render = function(props)
+			return hl.plugin.hyprlui.Button({
+				id = "btn",
+				w = 140,
+				h = 28,
+				color = props.color,
+				rounding = 6,
+				onClick = props.onClick,
+				hl.plugin.hyprlui.Text({ id = "label", x = 12, y = 6, text = props.label, size = 13 }),
+			})
+		end,
+	})
+end
+
+-- ALT + SHIFT + Z: toggle the components test window.
+hl.bind("ALT + SHIFT + Z", function()
+	if hyprluiComponentsWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_COMPONENTS_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiComponentsWindowOpen = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = HYPRLUI_COMPONENTS_WINDOW,
+			anchor = "center",
+			x = 0,
+			y = 190,
+			hl.plugin.hyprlui.Column({
+				id = "root",
+				gap = 8,
+				-- Explicit keys - each instance addressable afterwards.
+				-- onClick is supplied by the CALLER (not hardcoded inside
+				-- render()), since only the caller knows what key it
+				-- chose - render() itself has no way to know its own
+				-- instance's key.
+				hl.plugin.hyprlui.Component("LabeledButton", {
+					label = "Save",
+					color = 0x33224488,
+					onClick = function()
+						hyprluiSaveClicks = hyprluiSaveClicks + 1
+						local ok, err = pcall(
+							hl.plugin.hyprlui.set_text,
+							HYPRLUI_COMPONENTS_WINDOW,
+							"save_btn::label",
+							"Saved x" .. hyprluiSaveClicks
+						)
+						if not ok then
+							hyprluiWarn("hyprlui.set_text", err)
+						end
+					end,
+				}, { key = "save_btn" }),
+				hl.plugin.hyprlui.Component("LabeledButton", { label = "Cancel" }, { key = "cancel_btn" }),
+				-- No explicit key - auto-generated, fine for instances
+				-- nothing outside needs to address individually.
+				hl.plugin.hyprlui.Component("LabeledButton", { label = "Item 1" }),
+				hl.plugin.hyprlui.Component("LabeledButton", { label = "Item 2" }),
+				hl.plugin.hyprlui.Component("LabeledButton", { label = "Item 3" }),
+			}),
+		})
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.window (components test)", err)
+	else
+		hyprluiComponentsWindowOpen = true
+	end
+end, { description = "HyprLUI: toggle the components (Phase 9) test window" })
+
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required
 -- w/h fields, so buildWidget() hits requireFieldNumber() -> luaL_error()
