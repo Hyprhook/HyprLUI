@@ -71,7 +71,7 @@ namespace HyprLUI::InputHook {
 
             const auto releaseHit = HyprLUI::CUIManager::get().hitTestWidget(pt);
             if (releaseHit == *g_pressed)
-                HyprLUI::CUIManager::get().clickButton(releaseHit.canvasName, releaseHit.widgetId); // no-op if it's actually an Input, not a Button
+                HyprLUI::CUIManager::get().clickWidget(releaseHit.canvasName, releaseHit.widgetId); // no-op if it's actually an Input, not a Button/Checkbox
 
             g_pressed.reset();
         }

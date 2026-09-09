@@ -193,6 +193,44 @@
 //     exists). onKey/onChange errors are caught and logged, not
 //     propagated, same as onClick.
 //
+//   Image{ id, x = 0, y = 0, w, h, path, rounding = 0, visible }
+//     Decodes `path` (PNG/JPG/WEBP/SVG/AVIF/JXL - whatever the installed
+//     libhyprgraphics supports) and draws it as a texture. Size-to-content
+//     by default - the image's own natural pixel size - unless `w`/`h`
+//     are given, in which case the image is scaled/stretched to fill that
+//     box (unlike Text, which never stretches its own rendered glyphs -
+//     stretching a photo/icon to a requested size is the normal/expected
+//     thing, matching plain CSS `<img>` sizing). Decoding is synchronous
+//     and happens immediately (at construction, and again on every
+//     set_image() call) - a missing file or unsupported/corrupt format
+//     doesn't error the whole window{} out, it just logs a warning and
+//     leaves that Image drawing nothing (0x0 unless w/h were given).
+//
+//   Divider{ id, x = 0, y = 0, length, thickness = 1,
+//            orientation = "horizontal"|"vertical", color }
+//     A thin separator line - purely Lua-side sugar over a plain Box with
+//     a computed w/h, not a new C++ widget behavior. `length` is the
+//     dimension along the divider's own axis (maps to `w` when
+//     horizontal, the default, or `h` when vertical); `thickness` is the
+//     perpendicular one.
+//
+//   Checkbox{ id, x = 0, y = 0, w, h, color, checkedColor, rounding = 0,
+//             checked = false, onChange, visible }
+//     Checked/unchecked only (v1 scope) - explicitly not an animated
+//     iOS-style toggle switch. Renders like Box normally (flat-filled
+//     `color`); when checked, draws a smaller filled square inset inside
+//     it using `checkedColor` (a plain rect indicator, not a checkmark
+//     glyph - this toolkit has no icon font to draw one with). Same click
+//     semantics/lifetime as Button (left-click, press+release must land
+//     on the same widget, same InputHook.cpp plumbing) - the one real
+//     difference is a Checkbox owns its own boolean state: a successful
+//     click TOGGLES it before firing `onChange(checked)` with the new
+//     value, rather than just notifying "clicked" and leaving all state
+//     to the caller. `checked` seeds the initial state without going
+//     through onChange (same "no invocation on load" convention
+//     set_text()/set_input_text() use elsewhere). onChange errors are
+//     caught and logged, not propagated, same as onClick.
+//
 // Reactivity:
 //
 //   watch(name, fn, opts?)
@@ -311,6 +349,20 @@
 //     Returns an Input widget's current text. Mainly for reading it from
 //     somewhere other than onChange - e.g. a sibling Button's onClick
 //     wanting "whatever's currently typed" at click time.
+//
+//   set_image(window, id, path)
+//     Re-decodes an existing Image widget from a new file path (e.g.
+//     swapping an icon) - synchronous, same as construction. Logs a
+//     warning (doesn't error) and leaves the Image drawing nothing if the
+//     new path fails to load.
+//
+//   set_checkbox_checked(window, id, checked)
+//     Sets an existing Checkbox widget's checked state programmatically -
+//     does NOT invoke onChange, same reasoning set_text() vs. a live
+//     click uses.
+//
+//   get_checkbox_checked(window, id)
+//     Returns an existing Checkbox widget's current checked state.
 //
 //   remove_widget(window, id)
 //     Removes a single widget (and its subtree) from a window. Blurs it

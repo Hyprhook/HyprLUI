@@ -5,6 +5,9 @@
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 
+#include <hyprgraphics/image/Image.hpp>
+#include <hyprgraphics/cairo/CairoSurface.hpp>
+
 namespace HyprLUI::gfx {
 
     PHLMONITOR currentMonitor() {
@@ -21,6 +24,22 @@ namespace HyprLUI::gfx {
         // your installed src/render/Renderer.hpp for `renderText` to see
         // where it lives now.
         return g_pHyprRenderer->renderText(text, color, pointSize, /* italic = */ false, fontFamily, maxWidth, weight);
+    }
+
+    SP<HyprTexture> makeImageTexture(const std::string& path) {
+        Hyprgraphics::CImage image(path);
+        if (!image.success())
+            return nullptr;
+
+        auto surface = image.cairoSurface();
+        if (!surface)
+            return nullptr;
+
+        // `createTexture(cairo_surface_t*)` is the SAME IHyprRenderer
+        // interface makeTextTexture() above already uses (Renderer.hpp) -
+        // no new global/include needed, despite the decode step itself
+        // (Hyprgraphics::CImage) living in a separate library.
+        return g_pHyprRenderer->createTexture(surface->cairo());
     }
 
     namespace {

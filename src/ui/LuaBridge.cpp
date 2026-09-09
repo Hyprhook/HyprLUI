@@ -5,6 +5,8 @@
 #include "TextNode.hpp"
 #include "ButtonWidget.hpp"
 #include "InputWidget.hpp"
+#include "ImageWidget.hpp"
+#include "CheckboxWidget.hpp"
 #include "../reactive/Watcher.hpp"
 #include "../reserved/ReservedAreaComposer.hpp"
 
@@ -240,6 +242,15 @@ namespace HyprLUI::Lua {
         int luaInput(lua_State* L) {
             return tagWidget(L, "input");
         }
+        int luaImage(lua_State* L) {
+            return tagWidget(L, "image");
+        }
+        int luaDivider(lua_State* L) {
+            return tagWidget(L, "divider");
+        }
+        int luaCheckbox(lua_State* L) {
+            return tagWidget(L, "checkbox");
+        }
 
         // Unlike the other constructors, hyprlui.Bind(name) takes a plain
         // string, not a table - it just wraps it into a {__bind = name}
@@ -358,6 +369,31 @@ namespace HyprLUI::Lua {
             };
         }
 
+        // Same shape again, but for a Checkbox's `onChange` - fires with
+        // the NEW checked state after a real click toggles it (not from a
+        // programmatic set_checkbox_checked() call, same "no invocation on
+        // load/programmatic set" convention as Input's onChange above).
+        std::function<void(bool)> fieldOnChangeBool(lua_State* L, int idx) {
+            lua_getfield(L, idx, "onChange");
+            if (!lua_isfunction(L, -1)) {
+                lua_pop(L, 1);
+                return {};
+            }
+
+            const int ref   = luaL_ref(L, LUA_REGISTRYINDEX);
+            auto      fnRef = std::make_shared<SLuaFnRef>(L, ref);
+
+            return [L, fnRef](bool checked) {
+                lua_rawgeti(L, LUA_REGISTRYINDEX, fnRef->ref);
+                lua_pushboolean(L, checked);
+                if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                    const char* err = lua_tostring(L, -1);
+                    Log::logger->log(Log::ERR, "[hyprlui] error in onChange handler: {}", err ? err : "<error object is not a string>");
+                    lua_pop(L, 1);
+                }
+            };
+        }
+
         // --- tree builder ------------------------------------------------
         // Recursively converts a tagged widget-spec table (already on the
         // Lua stack at `idx`) into a real CWidget subtree. `autoId` is a
@@ -397,6 +433,36 @@ namespace HyprLUI::Lua {
                 const int    rounding = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
                 widget                = std::make_shared<CRectNode>(id, Vector2D{x, y}, Vector2D{w, h}, color, rounding);
 
+            } else if (type == "image") {
+                const auto path     = requireFieldString(L, idx, "path", "hyprlui.Image");
+                const int  rounding = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
+                auto       image    = std::make_shared<CImageWidget>(id, Vector2D{x, y}, path, rounding);
+                if (!image->loaded())
+                    Log::logger->log(Log::WARN, "[hyprlui] Image '{}': failed to load '{}' - drawing nothing", id, path);
+                widget = image;
+
+            } else if (type == "divider") {
+                // Sugar over a plain CRectNode with a computed w/h - a
+                // Divider has no behavior a Box doesn't already have, this
+                // exists purely so a caller doesn't have to remember "just
+                // make one axis 1px" by hand. `length` is the dimension
+                // along the divider's own axis (w if horizontal, h if
+                // vertical); `thickness` is the perpendicular one.
+                const double thickness   = fieldNumber(L, idx, "thickness", 1);
+                const double length      = requireFieldNumber(L, idx, "length", "hyprlui.Divider");
+                const auto   orientation = optFieldString(L, idx, "orientation", "horizontal");
+                const auto   color       = parseColorField(L, idx, "color", CHyprColor{0.5, 0.5, 0.5, 0.5}, "hyprlui.Divider");
+
+                Vector2D     size;
+                if (orientation == "horizontal")
+                    size = Vector2D{length, thickness};
+                else if (orientation == "vertical")
+                    size = Vector2D{thickness, length};
+                else
+                    luaL_error(L, "hyprlui.Divider: 'orientation' must be 'horizontal' or 'vertical', got '%s'", orientation.c_str());
+
+                widget = std::make_shared<CRectNode>(id, Vector2D{x, y}, size, color, 0);
+
             } else if (type == "button") {
                 const double w        = requireFieldNumber(L, idx, "w", "hyprlui.Button");
                 const double h        = requireFieldNumber(L, idx, "h", "hyprlui.Button");
@@ -433,6 +499,20 @@ namespace HyprLUI::Lua {
                 if (onBlur)
                     input->setOnBlur(std::move(onBlur));
                 widget = input;
+
+            } else if (type == "checkbox") {
+                const double w            = requireFieldNumber(L, idx, "w", "hyprlui.Checkbox");
+                const double h            = requireFieldNumber(L, idx, "h", "hyprlui.Checkbox");
+                const auto   color        = parseColorField(L, idx, "color", CHyprColor{0.2, 0.2, 0.2, 1.0}, "hyprlui.Checkbox");
+                const auto   checkedColor = parseColorField(L, idx, "checkedColor", CHyprColor{0.3, 0.6, 1.0, 1.0}, "hyprlui.Checkbox");
+                const int    rounding     = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
+                const bool   checked      = optFieldBool(L, idx, "checked", false);
+                auto         onChange     = fieldOnChangeBool(L, idx);
+
+                auto         checkbox = std::make_shared<CCheckboxWidget>(id, Vector2D{x, y}, Vector2D{w, h}, color, checkedColor, rounding, checked);
+                if (onChange)
+                    checkbox->setOnChange(std::move(onChange));
+                widget = checkbox;
 
             } else if (type == "text") {
                 const auto  bindName = fieldBindName(L, idx, "text");
@@ -539,10 +619,13 @@ namespace HyprLUI::Lua {
             widget->setDebug(debugSpec);
             widget->setDebugCascade(optFieldBool(L, idx, "debugCascade", true));
 
-            // Fixed-size override, meaningful only for containers - Box's
-            // w/h above are its actual (required) dimensions, not an
-            // override, and Text derives its size from rasterization.
-            if (type == "stack" || type == "row" || type == "column")
+            // Fixed-size override - meaningful for containers (whose w/h
+            // are genuinely optional) and Image (whose natural size comes
+            // from the decoded texture, same "size-to-content unless
+            // overridden" shape). Box's w/h above are its actual
+            // (required) dimensions, not an override, and Text derives
+            // its size from rasterization (no override exists for it).
+            if (type == "stack" || type == "row" || type == "column" || type == "image")
                 widget->setFixedSize(optFixedField(L, idx, "w"), optFixedField(L, idx, "h"));
 
             // Children: positional (ipairs-style) table entries.
@@ -882,6 +965,60 @@ namespace HyprLUI::Lua {
             return 1;
         }
 
+        int luaSetImage(lua_State* L) {
+            const std::string canvasName = luaL_checkstring(L, 1);
+            const std::string id         = luaL_checkstring(L, 2);
+            const std::string path       = luaL_checkstring(L, 3);
+
+            auto              canvas = CUIManager::get().getCanvas(canvasName);
+            if (!canvas || !canvas->root())
+                return luaL_error(L, "hyprlui.set_image: no window named '%s'", canvasName.c_str());
+
+            auto* image = dynamic_cast<CImageWidget*>(canvas->root()->findWidget(id));
+            if (!image)
+                return luaL_error(L, "hyprlui.set_image: no Image widget '%s' in window '%s'", id.c_str(), canvasName.c_str());
+
+            image->setImage(path);
+            if (!image->loaded())
+                Log::logger->log(Log::WARN, "[hyprlui] set_image: failed to load '{}' for widget '{}' - drawing nothing", path, id);
+            canvas->damage();
+            return 0;
+        }
+
+        int luaSetCheckboxChecked(lua_State* L) {
+            const std::string canvasName = luaL_checkstring(L, 1);
+            const std::string id         = luaL_checkstring(L, 2);
+            const bool        checked    = lua_toboolean(L, 3);
+
+            auto              canvas = CUIManager::get().getCanvas(canvasName);
+            if (!canvas || !canvas->root())
+                return luaL_error(L, "hyprlui.set_checkbox_checked: no window named '%s'", canvasName.c_str());
+
+            auto* checkbox = dynamic_cast<CCheckboxWidget*>(canvas->root()->findWidget(id));
+            if (!checkbox)
+                return luaL_error(L, "hyprlui.set_checkbox_checked: no Checkbox widget '%s' in window '%s'", id.c_str(), canvasName.c_str());
+
+            checkbox->setChecked(checked);
+            canvas->damage();
+            return 0;
+        }
+
+        int luaGetCheckboxChecked(lua_State* L) {
+            const std::string canvasName = luaL_checkstring(L, 1);
+            const std::string id         = luaL_checkstring(L, 2);
+
+            auto              canvas = CUIManager::get().getCanvas(canvasName);
+            if (!canvas || !canvas->root())
+                return luaL_error(L, "hyprlui.get_checkbox_checked: no window named '%s'", canvasName.c_str());
+
+            auto* checkbox = dynamic_cast<CCheckboxWidget*>(canvas->root()->findWidget(id));
+            if (!checkbox)
+                return luaL_error(L, "hyprlui.get_checkbox_checked: no Checkbox widget '%s' in window '%s'", id.c_str(), canvasName.c_str());
+
+            lua_pushboolean(L, checkbox->checked());
+            return 1;
+        }
+
         int luaRemoveWidget(lua_State* L) {
             const std::string canvasName = luaL_checkstring(L, 1);
             const std::string id         = luaL_checkstring(L, 2);
@@ -951,6 +1088,9 @@ namespace HyprLUI::Lua {
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "Box", &luaBox);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "Button", &luaButton);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "Input", &luaInput);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "Image", &luaImage);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "Divider", &luaDivider);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "Checkbox", &luaCheckbox);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "Bind", &luaBind);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "window", &luaWindow);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "remove_canvas", &luaRemoveCanvas);
@@ -959,6 +1099,9 @@ namespace HyprLUI::Lua {
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_text", &luaSetText);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_input_text", &luaSetInputText);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "get_input_text", &luaGetInputText);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_image", &luaSetImage);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_checkbox_checked", &luaSetCheckboxChecked);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "get_checkbox_checked", &luaGetCheckboxChecked);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "remove_widget", &luaRemoveWidget);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "watch", &luaWatch);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "notify", &luaNotify);
@@ -974,6 +1117,9 @@ namespace HyprLUI::Lua {
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "Box");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "Button");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "Input");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "Image");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "Divider");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "Checkbox");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "Bind");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "window");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "remove_canvas");
@@ -982,6 +1128,9 @@ namespace HyprLUI::Lua {
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_text");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_input_text");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "get_input_text");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_image");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_checkbox_checked");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "get_checkbox_checked");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "remove_widget");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "watch");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "notify");

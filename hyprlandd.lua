@@ -587,6 +587,93 @@ hl.bind("ALT + SHIFT + O", function()
 	hyprluiLongTextVisible = not hyprluiLongTextVisible
 end, { description = "HyprLUI: toggle the props test's truncated Text widget visible" })
 
+--------------------------------------------------
+---- HYPRLUI WIDGET CATALOG TEST (Phase 8) ----
+--------------------------------------------------
+-- Exercises the three widgets that round out the v1 catalog (DESIGN.md
+-- Phase 8): Image (decodes a real file via Hyprgraphics::CImage - see
+-- test-icon.png, a small placeholder icon committed alongside this test),
+-- Divider (pure Lua sugar over a Box, no new C++ behavior), and Checkbox
+-- (checked/unchecked, click-to-toggle, onChange fires the new state).
+-- Same outer-Stack-plus-absolutely-positioned-Column pattern the Phase 1
+-- test window uses so the background Box actually sits behind its
+-- siblings (see LuaBridge.hpp's own note on this).
+
+local HYPRLUI_CATALOG_WINDOW = "hyprlui_catalog_test"
+local hyprluiCatalogWindowOpen = false
+
+-- ALT + SHIFT + G: toggle the widget catalog test window.
+hl.bind("ALT + SHIFT + G", function()
+	if hyprluiCatalogWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_CATALOG_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiCatalogWindowOpen = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = HYPRLUI_CATALOG_WINDOW,
+			anchor = "center",
+			x = 0,
+			y = -140,
+			hl.plugin.hyprlui.Stack({
+				id = "root",
+				w = 240,
+				h = 190,
+				hl.plugin.hyprlui.Box({ id = "bg", x = 0, y = 0, w = 240, h = 190, color = 0x22111111, rounding = 8 }),
+				hl.plugin.hyprlui.Column({
+					id = "content",
+					x = 12,
+					y = 12,
+					gap = 10,
+					hl.plugin.hyprlui.Image({
+						id = "icon",
+						path = "/home/moritzgleissner/dev/HyprLUI/test-icon.png",
+						w = 40,
+						h = 40,
+					}),
+					hl.plugin.hyprlui.Divider({ id = "sep", length = 216 }),
+					hl.plugin.hyprlui.Row({
+						id = "cb_row",
+						gap = 8,
+						hl.plugin.hyprlui.Checkbox({
+							id = "cb",
+							w = 20,
+							h = 20,
+							color = 0x33333333,
+							checkedColor = 0xff4499ff,
+							rounding = 4,
+							-- get_checkbox_checked() would work just as well
+							-- here - onChange's own `checked` argument is
+							-- used instead just to exercise that path too.
+							onChange = function(checked)
+								local ok, err = pcall(
+									hl.plugin.hyprlui.set_text,
+									HYPRLUI_CATALOG_WINDOW,
+									"cb_label",
+									checked and "checked" or "unchecked"
+								)
+								if not ok then
+									hyprluiWarn("hyprlui.set_text", err)
+								end
+							end,
+						}),
+						hl.plugin.hyprlui.Text({ id = "cb_label", text = "unchecked", size = 14 }),
+					}),
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.window (catalog test)", err)
+	else
+		hyprluiCatalogWindowOpen = true
+	end
+end, { description = "HyprLUI: toggle the widget catalog (Image/Divider/Checkbox) test window" })
+
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required
 -- w/h fields, so buildWidget() hits requireFieldNumber() -> luaL_error()

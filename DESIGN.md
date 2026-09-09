@@ -288,8 +288,8 @@ live in a real plugin today):**
 > stub generator (`meta/generateLuaStubs.py` in the Hyprland repo) only
 > understands its own internal `hl.*` binding pattern and types
 > `hl.plugin.<name>` as `any`. **Whenever this section's API shape changes
-> (new widget type, new field, new mutation call - Phases 3/4/6 all touch
-> this), update `stubs/hyprlui.meta.lua` in the same change.** It's
+> (new widget type, new field, new mutation call - Phases 3/4/6/7/8 all
+> touch this), update `stubs/hyprlui.meta.lua` in the same change.** It's
 > installed to `share/hypr/stubs/hyprlui.meta.lua` by the flake's
 > `postInstall`, alongside Hyprland's own stubs.
 
@@ -1226,11 +1226,126 @@ piece (raw-keysym limitation).
       above/below its box an id/margin label sits) now scale with the
       resolved font size instead of a flat `12`, so a larger
       `debugFontSize` doesn't start overlapping the outline it's labeling.
-- [ ] **Phase 8** - v1 widget catalog completion. Rounds out the widget set
-      needed for a version-1 launch: `Image`, `Divider`, and a simple
+- [x] **Phase 8** - v1 widget catalog completion: `Image`, `Divider`,
       `Checkbox` (checked/unchecked only - explicitly not an iOS-style
-      toggle switch). `Slider` and `ProgressBar` are deliberately deferred
-      to a fast-follow release *after* v1 ships, not part of launch itself.
+      toggle switch). `Slider`/`ProgressBar` remain deliberately deferred
+      to a fast-follow release after v1, not part of this phase.
+
+      **`Image` - researched before implementing** (a fork was sent to
+      find how Hyprland loads images internally, same practice as every
+      internal-API-reliant phase; its report named `g_pHyprOpenGL`/
+      `OpenGL.hpp` for the texture-upload step, which turned out to be
+      wrong on independent verification - `createTexture(cairo_surface_t*)`
+      is actually declared on `IHyprRenderer` (`Renderer.hpp:176`), the
+      exact same interface `g_pHyprRenderer` already uses for
+      `renderText()` - so `gfx::makeImageTexture()` needed no new global
+      or include beyond what `gfx.cpp` already had. Lesson: verify a
+      subagent's cited file/line directly with a grep before building on
+      it, even when the rest of its report is accurate). Decoding itself
+      uses `Hyprgraphics::CImage` (`<hyprgraphics/image/Image.hpp>`) - a
+      separate library (`libhyprgraphics`) Hyprland core also depends on,
+      not the stable `HyprlandAPI::` surface, same stability tier as
+      `renderText`. Confirmed via `ldd`: PNG/JPEG/WEBP/SVG/AVIF/JPEG-XL all
+      supported "for free." Synchronous (the constructor decodes
+      immediately) - deliberately not using Hyprland's separate async
+      `CAsyncResourceGatherer`/`CImageResource` layer (used internally for
+      wallpaper prefetch), which would need a loading-in-progress state
+      this toolkit has no other precedent for; a real config's image count
+      is small enough that a synchronous decode at window-build time is
+      fine, matching this project's general "simplest correct thing, don't
+      build machinery a HUD-scale toolkit doesn't need" bias.
+
+      Needed an actual new build dependency (`hyprgraphics`) - the FIRST
+      time this project has needed one. Added to both `Makefile` (cflags
+      AND, unlike every other pkg-config dependency in that file, explicit
+      `-l`/`--libs` linking) and `meson.build`. The explicit linking is a
+      deliberate departure from this project's established "cflags only,
+      let the host process's own already-loaded symbols resolve
+      everything else at dlopen time" pattern (which every other internal
+      API call so far has relied on, e.g. `renderText`/Lua's C API) -
+      `Hyprgraphics::CImage`'s constructor/destructor/etc. are actual code
+      implemented inside `libhyprgraphics.so` itself, a genuinely separate
+      shared library, not just a method call through an already-resolved
+      Hyprland singleton - so this can't lean on the same "it's all in the
+      host process's own symbol table already" assumption. Verified by a
+      real `make` build + link (clean) and the established
+      `nm -D | grep "U _Z.*lua"` extern-C regression check (still 0).
+
+      `CImageWidget` decodes EAGERLY (constructor and every `setImage()`
+      call), unlike `CTextNode`'s lazy-on-first-`measure()` texture cache -
+      a deliberate divergence: text rasterization essentially never fails,
+      but a bad image path/unsupported format is a realistic, common
+      config mistake, and eager decoding is what lets `LuaBridge.cpp` check
+      `loaded()` and log a warning (not `luaL_error` - the rest of the
+      window is still meaningful even with one broken icon, unlike a
+      genuinely malformed spec) immediately at build time rather than only
+      once the widget first gets measured. Size-to-content by default (the
+      decoded texture's natural pixel size); an explicit fixed `w`/`h`
+      (reusing `CWidget::setFixedSize()` - the exact same mechanism
+      containers already use, no new plumbing) scales/stretches the image
+      to fill that box - deliberately the OPPOSITE choice from
+      `CTextNode::render()`'s Phase 7 fix, which draws at the texture's own
+      native size specifically to avoid stretching text glyphs. Stated
+      explicitly in both classes' doc comments since they look like the
+      same kind of leaf and aren't: stretching a photo/icon to a requested
+      size is the normal, expected behavior (matches plain CSS `<img>`
+      sizing); stretching text glyphs looks wrong.
+
+      **`Divider`** needed no new C++ widget class at all - purely
+      Lua-side sugar in `LuaBridge.cpp`'s `buildWidget()` that constructs a
+      plain `CRectNode` with a `w`/`h` computed from `length`/`thickness`/
+      `orientation`. A Divider has no behavior a Box doesn't already have;
+      the whole point is not having to remember "just make one axis 1px"
+      by hand.
+
+      **`Checkbox`** (`CCheckboxWidget`, mirrors `CButtonWidget`'s shape -
+      flat-filled outer box, leaf hit-test, `isInteractive() = true`)
+      renders a smaller inset filled square on top when checked, using a
+      separate `checkedColor` - a plain rect indicator rather than a
+      checkmark glyph, since this toolkit has no icon/glyph font dependency
+      to draw one with (and a filled square is itself a common enough
+      native-checkbox convention). The one real difference from Button:
+      `click()` TOGGLES its own `m_checked` before firing
+      `onChange(bool)` with the NEW value, rather than just notifying
+      "something was clicked" and leaving all state to the caller - a real
+      checkbox needs an answerable checked/unchecked question independent
+      of Lua (`get_checkbox_checked()`). This meant generalizing
+      `CUIManager::clickButton()` (renamed `clickWidget()`) to
+      `dynamic_cast` against `CButtonWidget` OR `CCheckboxWidget` and
+      forward to whichever matches' own `click()` - same "generalize the
+      dispatch, let each type's own method decide what a click means for
+      it" pattern Phase 6 already set for `SWidgetHit` covering both Button
+      and Input at the hit-testing level.
+
+      New Lua-facing mutators: `set_image()`, `set_checkbox_checked()`,
+      `get_checkbox_checked()` - same "no `onChange`/onLoad invocation on
+      a programmatic set" convention `set_text()`/`set_input_text()`
+      already established. A new `fieldOnChangeBool()` helper in
+      `LuaBridge.cpp` mirrors `fieldOnChange()`'s shape exactly, just
+      pushing a boolean argument instead of a string.
+
+      **Known gap, deliberately deferred - low-priority TODO, not worth it
+      without a concrete driving need**: `Image{}` cannot render/animate
+      GIFs. Two separate problems, not one: (1) `Hyprgraphics::CImage`
+      (what `makeImageTexture()` uses) has no GIF decode at all - its
+      `eImageFormat` enum only lists PNG/AVIF/JPEG/JXL/BMP/SVG/WEBP, and
+      `libhyprgraphics.so` doesn't even link `giflib` (confirmed via
+      `ldd`) - so GIF support would need an entirely separate decoder
+      (`giflib` is the obvious choice) linked directly by HyprLUI,
+      bypassing Hyprgraphics for this one format. (2) Even with a decoder,
+      actual *animated* playback needs real machinery this toolkit doesn't
+      have yet: per-frame textures (decoded once, or lazily per-frame),
+      something to advance the current frame on a schedule - reusing
+      `CWatcherManager`'s internal Hyprland event-loop-timer mechanism
+      (`CEventLoopTimer`, the same primitive Phase 3's polling watchers
+      already use) rather than inventing a second timer path - and
+      continuous re-damage while animating, same "damage every draw while
+      visible" trick `NotificationOverlay` uses (see this doc's "Current
+      state" section) - a single mutation's worth of damage isn't enough
+      for something that keeps changing every frame on its own. If this
+      ever gets picked up, it's a real chunk of new work (new dependency +
+      new timer-driven animation pattern), not a small extension of the
+      existing `Image{}` code path.
 - [ ] **Phase 9** - Widget composability. **Open design question, not yet
       solved** - flagged here so it doesn't get lost, not because an
       implementation plan exists yet. Today, building a widget once and

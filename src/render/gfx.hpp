@@ -43,6 +43,16 @@ namespace HyprLUI::gfx {
     SP<HyprTexture> makeTextTexture(const std::string& text, const CHyprColor& color, int pointSize, const std::string& fontFamily = "sans", int maxWidth = 0,
                                     int weight = 400 /* normal */);
 
+    // Decodes an image file (PNG/JPG/WEBP/SVG/AVIF/JXL - whatever the
+    // installed `libhyprgraphics` supports) into a GPU texture, via
+    // `Hyprgraphics::CImage` (`<hyprgraphics/image/Image.hpp>` - a
+    // separate library from Hyprland core, not the stable HyprlandAPI::
+    // surface, same stability tier as renderText() above) - synchronous,
+    // no loading-in-progress state to manage. Returns nullptr on a
+    // missing file or decode failure - check before use, same convention
+    // as makeTextTexture(). Cache the result on the node, same reasoning.
+    SP<HyprTexture> makeImageTexture(const std::string& path);
+
     // Blits a texture at `box` (screen-space, pixels) with the given alpha
     // and optional corner rounding.
     void drawTexture(const SP<HyprTexture>& tex, const CBox& box, float alpha = 1.F, int rounding = 0);

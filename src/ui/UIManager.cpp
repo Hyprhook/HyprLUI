@@ -1,6 +1,7 @@
 #include "UIManager.hpp"
 #include "ButtonWidget.hpp"
 #include "InputWidget.hpp"
+#include "CheckboxWidget.hpp"
 
 #include <algorithm>
 
@@ -78,17 +79,24 @@ namespace HyprLUI {
         return {};
     }
 
-    bool CUIManager::clickButton(const std::string& canvasName, const std::string& widgetId) {
+    bool CUIManager::clickWidget(const std::string& canvasName, const std::string& widgetId) {
         auto canvas = getCanvas(canvasName);
         if (!canvas || !canvas->root())
             return false;
 
-        auto* button = dynamic_cast<CButtonWidget*>(canvas->root()->findWidget(widgetId));
-        if (!button)
+        auto* widget = canvas->root()->findWidget(widgetId);
+        if (!widget)
             return false;
 
-        button->click();
-        return true;
+        if (auto* button = dynamic_cast<CButtonWidget*>(widget)) {
+            button->click();
+            return true;
+        }
+        if (auto* checkbox = dynamic_cast<CCheckboxWidget*>(widget)) {
+            checkbox->click();
+            return true;
+        }
+        return false;
     }
 
     bool CUIManager::focusWidget(const std::string& canvasName, const std::string& widgetId) {

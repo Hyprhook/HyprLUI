@@ -3,8 +3,8 @@
 // InputHook.hpp
 //
 // Registers the mouse-button and keyboard-key listeners HyprLUI needs for
-// clickable Button widgets and focusable Input widgets, forwarding hit-
-// testing/focus/key dispatch to UIManager. Mirrors src/render/Render.hpp's
+// clickable Button/Checkbox widgets and focusable Input widgets, forwarding
+// hit-testing/focus/key dispatch to UIManager. Mirrors src/render/Render.hpp's
 // shape - the only file that talks to Event::bus()->m_events.input,
 // keeping hook wiring separate from the UI toolkit itself, same as
 // RenderHook does for render.stage.

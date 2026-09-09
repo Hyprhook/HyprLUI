@@ -63,22 +63,27 @@ namespace HyprLUI {
         void damageAll();
 
         // --- Input -------------------------------------------------------
-        // Finds the topmost interactive (CButtonWidget or CInputWidget)
-        // hit at global point `pt`, searching only Overlay-zorder,
-        // currently-visible canvases, newest-created first. Background
-        // canvases are explicitly decorative/occludable-by-real-windows
-        // (see EZOrder's doc comment) - not click targets. Empty result
-        // (SWidgetHit::empty()) if nothing was hit; used by InputHook.cpp
-        // for both the initial press hit-test and the matching re-test at
-        // release.
+        // Finds the topmost interactive (CButtonWidget, CInputWidget, or
+        // CCheckboxWidget) hit at global point `pt`, searching only
+        // Overlay-zorder, currently-visible canvases, newest-created
+        // first. Background canvases are explicitly decorative/
+        // occludable-by-real-windows (see EZOrder's doc comment) - not
+        // click targets. Empty result (SWidgetHit::empty()) if nothing was
+        // hit; used by InputHook.cpp for both the initial press hit-test
+        // and the matching re-test at release.
         SWidgetHit hitTestWidget(const Vector2D& pt) const;
 
-        // Invokes the onClick handler of the button named `widgetId` on
-        // canvas `canvasName`, if both still exist and it's actually a
-        // CButtonWidget (false, no-op, if it resolves to something else,
-        // e.g. an Input). Called by InputHook.cpp once a press and its
-        // matching release both resolve to the same SWidgetHit.
-        bool clickButton(const std::string& canvasName, const std::string& widgetId);
+        // Invokes a real click on the widget named `widgetId` on canvas
+        // `canvasName`, if both still exist and it's actually a
+        // CButtonWidget or CCheckboxWidget (false, no-op, if it resolves
+        // to something else, e.g. an Input - which grabs focus on PRESS
+        // instead, see handlePressFocus()). Each type's own click()
+        // decides what "a click" means for it (Button: just invoke
+        // onClick; Checkbox: toggle then invoke onChange with the new
+        // value) - this only resolves WHICH type it is and forwards.
+        // Called by InputHook.cpp once a press and its matching release
+        // both resolve to the same SWidgetHit.
+        bool clickWidget(const std::string& canvasName, const std::string& widgetId);
 
         // --- Keyboard focus (Input widgets) ------------------------------
         // Exactly one Input across every HyprLUI window can hold HyprLUI's

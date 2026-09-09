@@ -195,7 +195,48 @@
 ---@field onFocus? HyprLUI.OnFocusFn
 ---@field onBlur? HyprLUI.OnBlurFn
 
----@alias HyprLUI.WidgetSpec HyprLUI.BoxSpec|HyprLUI.TextSpec|HyprLUI.StackSpec|HyprLUI.FlexSpec|HyprLUI.ButtonSpec|HyprLUI.InputSpec
+-- Decodes `path` (PNG/JPG/WEBP/SVG/AVIF/JXL) and draws it. Size-to-content
+-- (the image's own natural pixel size) unless w/h are given, in which case
+-- it's scaled/stretched to fill that box (unlike Text, which never
+-- stretches its own glyphs). Synchronous - a bad path logs a warning and
+-- leaves it drawing nothing rather than erroring the whole window{} out.
+---@class HyprLUI.ImageSpec : HyprLUI.WidgetCommon
+---@field w? number
+---@field h? number
+---@field path string
+---@field rounding? integer
+
+-- A thin separator line - pure Lua-side sugar over a Box with a computed
+-- w/h. `length` is the dimension along the divider's own axis (w if
+-- horizontal, the default, or h if vertical); `thickness` is the
+-- perpendicular one.
+---@class HyprLUI.DividerSpec : HyprLUI.WidgetCommon
+---@field length number
+---@field thickness? number
+---@field orientation? "horizontal"|"vertical"
+---@field color? HyprLUI.Color
+
+-- Fires with a Checkbox's NEW checked state after a real click toggles it
+-- (not from a programmatic set_checkbox_checked() call).
+---@alias HyprLUI.OnChangeBoolFn fun(checked: boolean)
+
+-- Checked/unchecked only (v1 scope) - not an animated toggle switch. Draws
+-- like Box (`color`); when checked, an inset filled square using
+-- `checkedColor` on top (a plain rect indicator, not a checkmark glyph).
+-- Same click semantics/lifetime as Button - the difference is a Checkbox
+-- owns its own boolean state, toggled by a real click before onChange
+-- fires with the new value. `checked` seeds the initial state without
+-- invoking onChange.
+---@class HyprLUI.CheckboxSpec : HyprLUI.WidgetCommon
+---@field w number
+---@field h number
+---@field color? HyprLUI.Color
+---@field checkedColor? HyprLUI.Color
+---@field rounding? integer
+---@field checked? boolean
+---@field onChange? HyprLUI.OnChangeBoolFn
+
+---@alias HyprLUI.WidgetSpec HyprLUI.BoxSpec|HyprLUI.TextSpec|HyprLUI.StackSpec|HyprLUI.FlexSpec|HyprLUI.ButtonSpec|HyprLUI.InputSpec|HyprLUI.ImageSpec|HyprLUI.DividerSpec|HyprLUI.CheckboxSpec
 
 -- Top-level table passed to hyprlui.window{} - the [1] entry is the root
 -- widget (exactly one required: Stack/Row/Column/Text/Box).
@@ -224,12 +265,18 @@
 ---@field Box fun(spec: HyprLUI.BoxSpec): HyprLUI.BoxSpec
 ---@field Button fun(spec: HyprLUI.ButtonSpec): HyprLUI.ButtonSpec
 ---@field Input fun(spec: HyprLUI.InputSpec): HyprLUI.InputSpec
+---@field Image fun(spec: HyprLUI.ImageSpec): HyprLUI.ImageSpec
+---@field Divider fun(spec: HyprLUI.DividerSpec): HyprLUI.DividerSpec
+---@field Checkbox fun(spec: HyprLUI.CheckboxSpec): HyprLUI.CheckboxSpec
 ---@field remove_canvas fun(name: string): nil
 ---@field set_canvas_visible fun(name: string, visible: boolean): nil
 ---@field set_widget_visible fun(window: string, id: string, visible: boolean): nil
 ---@field set_text fun(window: string, id: string, text: string): nil
 ---@field set_input_text fun(window: string, id: string, text: string): nil
 ---@field get_input_text fun(window: string, id: string): string
+---@field set_image fun(window: string, id: string, path: string): nil
+---@field set_checkbox_checked fun(window: string, id: string, checked: boolean): nil
+---@field get_checkbox_checked fun(window: string, id: string): boolean
 ---@field remove_widget fun(window: string, id: string): nil
 ---@field watch HyprLUI.WatchFn
 ---@field notify fun(name: string): nil
