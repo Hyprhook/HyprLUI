@@ -107,7 +107,19 @@
 ---@field debugCascade? boolean
 ---@field debugShow? HyprLUI.DebugShow
 ---@field debugFontSize? integer
+---@field disabled? boolean
+---@field hoverColor? HyprLUI.Color
+---@field disabledColor? HyprLUI.Color
+---@field onHoverStart? HyprLUI.OnHoverFn
+---@field onHoverEnd? HyprLUI.OnHoverFn
+---@field onScroll? HyprLUI.OnScrollFn
+---@field onClick? HyprLUI.OnClickFn
 ---@field [integer] HyprLUI.WidgetSpec
+
+-- `delta` is the raw IPointer::SAxisEvent value forwarded as-is (no
+-- normalization); `vertical` is true for the common mouse-wheel axis,
+-- false for horizontal scroll.
+---@alias HyprLUI.OnScrollFn fun(delta: number, vertical: boolean)
 
 ---@class HyprLUI.DebugShow
 ---@field box? boolean
@@ -149,6 +161,7 @@
 ---@alias HyprLUI.OnClickFn fun()
 ---@alias HyprLUI.OnFocusFn fun()
 ---@alias HyprLUI.OnBlurFn fun()
+---@alias HyprLUI.OnHoverFn fun()
 -- `keysym` is an xkb_keysym_t (already layout/shift-aware - see
 -- LuaBridge.hpp) - compare against xkbcommon's XKB_KEY_* integer values.
 -- `pressed` is true on key-down, false on key-up.
@@ -157,15 +170,16 @@
 -- not from a programmatic set_input_text() call.
 ---@alias HyprLUI.OnChangeFn fun(text: string)
 
--- Like Box, but clickable (left-click only, v1) - see LuaBridge.hpp for
--- press/release/pass-through semantics. Children are positioned manually/
--- absolutely inside it, same as Stack.
+-- Like Box, but always a real click target structurally, even with no
+-- onClick set (`onClick` itself is a WidgetCommon field now, not
+-- Button-specific - see LuaBridge.hpp for press/release/pass-through
+-- semantics). Children are positioned manually/absolutely inside it,
+-- same as Stack.
 ---@class HyprLUI.ButtonSpec : HyprLUI.WidgetCommon
 ---@field w number
 ---@field h number
 ---@field color? HyprLUI.Color
 ---@field rounding? integer
----@field onClick? HyprLUI.OnClickFn
 
 -- A focusable rectangle that behaves like an actual text field by default
 -- - typing appends a character, Backspace removes the last one, current
@@ -296,6 +310,7 @@
 ---@field remove_canvas fun(name: string): nil
 ---@field set_canvas_visible fun(name: string, visible: boolean): nil
 ---@field set_widget_visible fun(window: string, id: string, visible: boolean): nil
+---@field set_widget_disabled fun(window: string, id: string, disabled: boolean): nil
 ---@field set_text fun(window: string, id: string, text: string): nil
 ---@field set_input_text fun(window: string, id: string, text: string): nil
 ---@field get_input_text fun(window: string, id: string): string

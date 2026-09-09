@@ -112,20 +112,21 @@
 //
 //   Button{ id, x = 0, y = 0, w, h, color, rounding = 0, visible, onClick,
 //           <children...> }
-//     Like Box, but clickable (left-click only, v1) - `onClick` is a Lua
-//     function called with no arguments when a press and its matching
-//     release both land on this same button (moving off between press and
-//     release cancels it, same convention as every other GUI toolkit).
-//     Children are positioned manually/absolutely inside it, same as
-//     Stack - typically a Text label. Only Overlay-zorder windows (the
-//     default) are clickable; Background windows are decorative and can
-//     be occluded by real app windows, so hit-testing skips them (see
-//     DESIGN.md Phase 4). A Button's own bounds are the only clickable
-//     area - clicking elsewhere in the same window (its background, a
-//     label, empty space) passes through to whatever's behind it
-//     untouched, it does not swallow the whole window's worth of clicks.
-//     onClick errors are caught and logged, not propagated - this fires
-//     from the input hook, not a caller-side pcall.
+//     Like Box, but always a real click target structurally, even with no
+//     onClick set (left-click only, v1) - `onClick` itself is CWidget's
+//     own generic field now (see "Interactive state" below), not
+//     Button-specific; what makes Button special is that it's ALWAYS a
+//     valid click target (CButtonWidget's own hitTest() override), where
+//     every other widget type only becomes one once you actually give it
+//     an onClick handler. Children are positioned manually/absolutely
+//     inside it, same as Stack - typically a Text label. Only Overlay-
+//     zorder windows (the default) are clickable; Background windows are
+//     decorative and can be occluded by real app windows, so hit-testing
+//     skips them (see DESIGN.md Phase 4). A Button's own bounds are the
+//     only clickable area - clicking elsewhere in the same window (its
+//     background, a label, empty space) passes through to whatever's
+//     behind it untouched, it does not swallow the whole window's worth
+//     of clicks.
 //
 //   Input{ id, x = 0, y = 0, w, h, color, rounding = 0, visible,
 //          text = "", textColor, textSize = 14, textFont = "sans",
@@ -230,6 +231,79 @@
 //     through onChange (same "no invocation on load" convention
 //     set_text()/set_input_text() use elsewhere). onChange errors are
 //     caught and logged, not propagated, same as onClick.
+//
+// Interactive state (Phase 10, DESIGN.md, `onClick` added in a same-
+// conversation follow-up) - every widget accepts all of these:
+//
+//   onClick
+//     A plain no-argument callback - what actually MAKES a widget a real
+//     click target in the first place, for anything that isn't already
+//     one structurally (Button always is; Input/Checkbox have their own
+//     specific click behavior instead - see their own sections above).
+//     Set this on a Box/Text/Image/Row/Column/Stack to make THAT
+//     specific widget clickable, with the exact same press-must-land-on-
+//     the-same-widget-as-release semantics Button always had. A child
+//     widget's own click target (if any) always gets first refusal over
+//     an ancestor's onClick - e.g. a Checkbox inside a Row that also has
+//     onClick set: clicking the checkbox toggles it, not the row's
+//     handler; only a click that misses every interactive descendant
+//     falls through to the row itself. Errors are caught and logged, not
+//     propagated - this fires from the input hook, not a caller-side
+//     pcall. `onScroll` below works the same way for making a widget a
+//     scroll target - either one alone is enough to make a plain
+//     Box/Text/Image/Row/Column/Stack hoverable/scrollable/disableable
+//     too, since hover-tracking and scroll dispatch go through this exact
+//     same hit-testing.
+//
+// Every field below this point only actually DOES anything on a widget
+// that's interactive in the first place - either structurally
+// (Button/Input/Checkbox) or because onClick/onScroll above was set - a
+// decorative Box with none of those is inert, since its hitTest() never
+// matches, so it can never become hovered/disabled-and-skipped either:
+//
+//   disabled
+//     Boolean, default false. Excludes this widget from hitTest()
+//     entirely - click-through/unfocusable, as if it isn't there for
+//     interaction purposes, while it still renders. A disabled Input also
+//     can't be focused programmatically via focus_widget(). Mutable at
+//     runtime via set_widget_disabled(window, id, disabled) below -
+//     disabling a currently-focused/hovered widget blurs/un-hovers it
+//     first, same "keep state honest" reasoning set_widget_visible()
+//     already follows.
+//
+//   hoverColor, disabledColor
+//     Optional colors (same accepted shapes as `color` - packed integer
+//     or {r,g,b,a} table). Applied automatically in place of the widget's
+//     own `color` while hovered/disabled, respectively - no Lua round
+//     trip needed for the common case, same declarative-alternate-color
+//     shape Checkbox's `checkedColor` already established. disabledColor
+//     always wins over hoverColor when both could apply, though this
+//     never actually comes up in practice - a disabled widget is never
+//     the hovered one (excluded from hitTest(), see `disabled` above).
+//
+//   onHoverStart, onHoverEnd
+//     Fire on the hover transition (mirrors onFocus/onBlur's shape - no
+//     arguments) - the escape hatch for anything beyond a flat color
+//     swap, e.g. changing a SIBLING widget's appearance on hover. Cursor
+//     feedback (switching to a pointer cursor while hovering an
+//     interactive, non-disabled widget - InputHook.cpp, via Hyprland's
+//     own Pointer::Cursor::overrideController) happens automatically and
+//     independently of whether either of these is set.
+//
+//   onScroll(delta, vertical)
+//     Stays completely inert (the underlying mouse.axis event passes
+//     through untouched to whatever real window is behind it) unless set
+//     - matches the "swallow only what's opted into" philosophy already
+//     established for Phase 6's keybind-priority default. Same
+//     hit-target-making effect as onClick above on a plain Box/Text/
+//     Image/Row/Column/Stack (either field alone is enough), since hover-
+//     tracking and scroll dispatch go through the same hit-testing click
+//     does. `delta` is the raw IPointer::SAxisEvent value forwarded as-is,
+//     no normalization; `vertical` is true for the common mouse-wheel
+//     axis, false for horizontal scroll. Only ever cancels the underlying
+//     event when a handler was actually set - scrolling over an
+//     interactive widget with no onScroll set behaves exactly as if
+//     HyprLUI weren't there.
 //
 // Composability (Phase 9, DESIGN.md):
 //
@@ -439,7 +513,13 @@
 //     being drawn/hit-tested while hidden (same `visible` mechanism every
 //     widget's constructor-time `visible` field already sets - this is
 //     just the runtime mutator for it). Hiding the currently-focused Input
-//     blurs it first, same reasoning as set_canvas_visible().
+//     blurs it first, same reasoning as set_canvas_visible(); hiding the
+//     currently-hovered widget un-hovers it (Phase 10) the same way.
+//
+//   set_widget_disabled(window, id, disabled)
+//     Runtime mutator for the `disabled` field above (Phase 10) - same
+//     "keep state honest" reasoning: disabling a currently-focused/
+//     hovered widget blurs/un-hovers it first.
 //
 //   set_text(window, id, text)
 //     Updates an existing Text widget's content in place.

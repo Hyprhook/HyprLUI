@@ -151,6 +151,20 @@ namespace HyprLUI::Lua {
             return def; // unreachable - silences -Wreturn-type
         }
 
+        // Same accepted shapes as parseColorField() above, but for
+        // optional color fields (Phase 10's hoverColor/disabledColor)
+        // where absence is itself meaningful (no override) rather than
+        // falling back to some baked-in default color.
+        std::optional<CHyprColor> optColorField(lua_State* L, int idx, const char* key, const char* fnName) {
+            lua_getfield(L, idx, key);
+            if (lua_isnil(L, -1)) {
+                lua_pop(L, 1);
+                return std::nullopt;
+            }
+            lua_pop(L, 1);
+            return parseColorField(L, idx, key, CHyprColor{}, fnName);
+        }
+
         // `padding`/`margin` fields (Phase 7) accept either a single
         // number (applied uniformly to all four sides, the common case)
         // or a table { top, right, bottom, left } (each defaulting to 0
@@ -396,6 +410,32 @@ namespace HyprLUI::Lua {
             };
         }
 
+        // Same shape again, but for `onScroll` (Phase 10) - fires with the
+        // raw IPointer::SAxisEvent delta and whether the axis was vertical
+        // (the common mouse-wheel case) or horizontal, forwarded as-is, no
+        // attempt to normalize/invert it into a "lines scrolled" unit.
+        std::function<void(double, bool)> fieldOnScroll(lua_State* L, int idx) {
+            lua_getfield(L, idx, "onScroll");
+            if (!lua_isfunction(L, -1)) {
+                lua_pop(L, 1);
+                return {};
+            }
+
+            const int ref   = luaL_ref(L, LUA_REGISTRYINDEX);
+            auto      fnRef = std::make_shared<SLuaFnRef>(L, ref);
+
+            return [L, fnRef](double delta, bool vertical) {
+                lua_rawgeti(L, LUA_REGISTRYINDEX, fnRef->ref);
+                lua_pushnumber(L, delta);
+                lua_pushboolean(L, vertical);
+                if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
+                    const char* err = lua_tostring(L, -1);
+                    Log::logger->log(Log::ERR, "[hyprlui] error in onScroll handler: {}", err ? err : "<error object is not a string>");
+                    lua_pop(L, 1);
+                }
+            };
+        }
+
         // --- tree builder ------------------------------------------------
         // Recursively converts a tagged widget-spec table (already on the
         // Lua stack at `idx`) into a real CWidget subtree. `autoId` is a
@@ -484,12 +524,9 @@ namespace HyprLUI::Lua {
                 const double h        = requireFieldNumber(L, idx, "h", "hyprlui.Button");
                 const auto   color    = parseColorField(L, idx, "color", CHyprColor{0.2, 0.2, 0.2, 1.0}, "hyprlui.Button");
                 const int    rounding = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
-                auto         onClick  = fieldZeroArgFn(L, idx, "onClick");
-
-                auto         button = std::make_shared<CButtonWidget>(id, Vector2D{x, y}, Vector2D{w, h}, color, rounding);
-                if (onClick)
-                    button->setOnClick(std::move(onClick));
-                widget = button;
+                // onClick is parsed generically below (Phase 10 follow-up
+                // - CWidget's own field now, not Button-specific).
+                widget = std::make_shared<CButtonWidget>(id, Vector2D{x, y}, Vector2D{w, h}, color, rounding);
 
             } else if (type == "input") {
                 const double w         = requireFieldNumber(L, idx, "w", "hyprlui.Input");
@@ -634,6 +671,30 @@ namespace HyprLUI::Lua {
                 debugSpec.fontSize = static_cast<int>(*fontSize);
             widget->setDebug(debugSpec);
             widget->setDebugCascade(optFieldBool(L, idx, "debugCascade", true));
+
+            // Interactive state (Phase 10, DESIGN.md) - hoverColor/
+            // disabledColor/onHoverStart/onHoverEnd/onScroll/disabled are
+            // only meaningful for a widget whose isInteractive() is true,
+            // but parsed generically here like everything else in this
+            // tail; a decorative widget setting them does nothing (see
+            // CWidget::setDisabled()'s doc comment). onClick is different
+            // - it's what actually MAKES a plain Box/Text/Image/Row/
+            // Column/Stack interactive in the first place (see Widget.
+            // hpp's hitTest()/isInteractive() defaults) rather than only
+            // doing something on a widget that already was.
+            widget->setDisabled(optFieldBool(L, idx, "disabled", false));
+            if (auto hoverColor = optColorField(L, idx, "hoverColor", "hyprlui"))
+                widget->setHoverColor(hoverColor);
+            if (auto disabledColor = optColorField(L, idx, "disabledColor", "hyprlui"))
+                widget->setDisabledColor(disabledColor);
+            if (auto onHoverStart = fieldZeroArgFn(L, idx, "onHoverStart"))
+                widget->setOnHoverStart(std::move(onHoverStart));
+            if (auto onHoverEnd = fieldZeroArgFn(L, idx, "onHoverEnd"))
+                widget->setOnHoverEnd(std::move(onHoverEnd));
+            if (auto onScroll = fieldOnScroll(L, idx))
+                widget->setOnScroll(std::move(onScroll));
+            if (auto onClick = fieldZeroArgFn(L, idx, "onClick"))
+                widget->setOnClick(std::move(onClick));
 
             // Fixed-size override - meaningful for containers (whose w/h
             // are genuinely optional) and Image (whose natural size comes
@@ -939,11 +1000,47 @@ namespace HyprLUI::Lua {
             // Same reasoning as set_canvas_visible() - hiding a widget
             // that happens to be the focused Input blurs it first, rather
             // than leaving it invisible yet still silently holding
-            // HyprLUI's keyboard focus.
-            if (!visible && CUIManager::get().isFocused(canvasName, id))
-                CUIManager::get().blurFocusedInput();
+            // HyprLUI's keyboard focus. Same for hover (Phase 10) - a
+            // hidden widget shouldn't silently keep firing onHoverEnd-
+            // pending state either.
+            if (!visible) {
+                if (CUIManager::get().isFocused(canvasName, id))
+                    CUIManager::get().blurFocusedInput();
+                if (CUIManager::get().isHovered(canvasName, id))
+                    CUIManager::get().updateHover({});
+            }
 
             widget->setVisible(visible);
+            canvas->damage();
+            return 0;
+        }
+
+        int luaSetWidgetDisabled(lua_State* L) {
+            const std::string canvasName = luaL_checkstring(L, 1);
+            const std::string id         = luaL_checkstring(L, 2);
+            const bool        disabled   = lua_toboolean(L, 3);
+
+            auto              canvas = CUIManager::get().getCanvas(canvasName);
+            if (!canvas || !canvas->root())
+                return luaL_error(L, "hyprlui.set_widget_disabled: no window named '%s'", canvasName.c_str());
+
+            auto* widget = canvas->root()->findWidget(id);
+            if (!widget)
+                return luaL_error(L, "hyprlui.set_widget_disabled: no widget '%s' in window '%s'", id.c_str(), canvasName.c_str());
+
+            // A widget that becomes disabled while focused/hovered can't
+            // stay that way - hitTest() excluding it from here on means
+            // it could never have BECOME focused/hovered in the first
+            // place, so drop that state now rather than leave it stale
+            // (same "keep C++ state honest" precedent as set_widget_visible).
+            if (disabled) {
+                if (CUIManager::get().isFocused(canvasName, id))
+                    CUIManager::get().blurFocusedInput();
+                if (CUIManager::get().isHovered(canvasName, id))
+                    CUIManager::get().updateHover({});
+            }
+
+            widget->setDisabled(disabled);
             canvas->damage();
             return 0;
         }
@@ -1157,6 +1254,7 @@ namespace HyprLUI::Lua {
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "remove_canvas", &luaRemoveCanvas);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_canvas_visible", &luaSetCanvasVisible);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_widget_visible", &luaSetWidgetVisible);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_widget_disabled", &luaSetWidgetDisabled);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_text", &luaSetText);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_input_text", &luaSetInputText);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "get_input_text", &luaGetInputText);
@@ -1188,6 +1286,7 @@ namespace HyprLUI::Lua {
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "remove_canvas");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_canvas_visible");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_widget_visible");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_widget_disabled");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_text");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_input_text");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "get_input_text");

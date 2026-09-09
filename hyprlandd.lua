@@ -781,6 +781,129 @@ hl.bind("ALT + SHIFT + Z", function()
 	end
 end, { description = "HyprLUI: toggle the components (Phase 9) test window" })
 
+--------------------------------------------------
+---- HYPRLUI INTERACTIVE STATE TEST (Phase 10) ----
+--------------------------------------------------
+-- Exercises disabled/hover/scroll (DESIGN.md Phase 10). Hovering the
+-- "target" button swaps its color via hoverColor - built in, no Lua round
+-- trip needed - AND fires onHoverStart/onHoverEnd to update a status
+-- label (the escape hatch for anything beyond a flat color swap); a real
+-- pointer cursor change over it happens automatically too, independent of
+-- either. Scrolling over it fires onScroll. The checkbox toggles the
+-- target's disabled state via set_widget_disabled() - once disabled, it's
+-- click-through/unhoverable/unscrollable entirely (excluded from hit-
+-- testing, same as a real disabled control) and shows disabledColor
+-- instead.
+--
+-- "plain_click" is a bare Box (NOT a Button) made clickable purely by
+-- giving it an onClick handler - onClick moved to being a generic
+-- CWidget field in a same-session Phase 10 follow-up, so any widget can
+-- become a click target this way, not just Button.
+
+local HYPRLUI_INTERACTIVE_WINDOW = "hyprlui_interactive_test"
+local hyprluiInteractiveWindowOpen = false
+local hyprluiScrollCount = 0
+local hyprluiPlainClicks = 0
+
+-- ALT + SHIFT + X: toggle the interactive state test window.
+hl.bind("ALT + SHIFT + X", function()
+	if hyprluiInteractiveWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_INTERACTIVE_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiInteractiveWindowOpen = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = HYPRLUI_INTERACTIVE_WINDOW,
+			anchor = "center",
+			x = 0,
+			y = -190,
+			hl.plugin.hyprlui.Column({
+				id = "root",
+				gap = 8,
+				hl.plugin.hyprlui.Button({
+					id = "target",
+					w = 180,
+					h = 36,
+					color = 0x33333333,
+					hoverColor = 0x3355aaff,
+					disabledColor = 0x22111111,
+					rounding = 6,
+					onHoverStart = function()
+						pcall(hl.plugin.hyprlui.set_text, HYPRLUI_INTERACTIVE_WINDOW, "status", "hovering")
+					end,
+					onHoverEnd = function()
+						pcall(hl.plugin.hyprlui.set_text, HYPRLUI_INTERACTIVE_WINDOW, "status", "idle")
+					end,
+					onScroll = function(delta, vertical)
+						hyprluiScrollCount = hyprluiScrollCount + 1
+						pcall(
+							hl.plugin.hyprlui.set_text,
+							HYPRLUI_INTERACTIVE_WINDOW,
+							"status",
+							"scrolled x" .. hyprluiScrollCount
+						)
+					end,
+					hl.plugin.hyprlui.Text({ id = "target_label", x = 12, y = 10, text = "hover / scroll me", size = 13 }),
+				}),
+				hl.plugin.hyprlui.Box({
+					id = "plain_click",
+					w = 180,
+					h = 28,
+					color = 0x33447744,
+					rounding = 6,
+					onClick = function()
+						hyprluiPlainClicks = hyprluiPlainClicks + 1
+						pcall(
+							hl.plugin.hyprlui.set_text,
+							HYPRLUI_INTERACTIVE_WINDOW,
+							"status",
+							"plain box clicked x" .. hyprluiPlainClicks
+						)
+					end,
+					hl.plugin.hyprlui.Text({ id = "plain_click_label", x = 12, y = 7, text = "click me (plain Box)", size = 12 }),
+				}),
+				hl.plugin.hyprlui.Text({ id = "status", text = "idle", size = 12 }),
+				hl.plugin.hyprlui.Row({
+					id = "toggle_row",
+					gap = 8,
+					hl.plugin.hyprlui.Checkbox({
+						id = "toggle",
+						w = 18,
+						h = 18,
+						color = 0x33333333,
+						checkedColor = 0xffcc4444,
+						rounding = 3,
+						onChange = function(checked)
+							local ok, err = pcall(
+								hl.plugin.hyprlui.set_widget_disabled,
+								HYPRLUI_INTERACTIVE_WINDOW,
+								"target",
+								checked
+							)
+							if not ok then
+								hyprluiWarn("hyprlui.set_widget_disabled", err)
+							end
+						end,
+					}),
+					hl.plugin.hyprlui.Text({ id = "toggle_label", text = "disable target", size = 12 }),
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.window (interactive test)", err)
+	else
+		hyprluiInteractiveWindowOpen = true
+		hyprluiScrollCount = 0
+		hyprluiPlainClicks = 0
+	end
+end, { description = "HyprLUI: toggle the interactive state (Phase 10) test window" })
+
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required
 -- w/h fields, so buildWidget() hits requireFieldNumber() -> luaL_error()

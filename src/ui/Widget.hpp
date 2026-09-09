@@ -13,8 +13,10 @@
 // implement arrangeChildren() (see ContainerWidget.hpp for Stack/Row/Column).
 
 #include <hyprland/src/helpers/math/Math.hpp>
+#include <hyprland/src/helpers/Color.hpp>
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -152,6 +154,25 @@ namespace HyprLUI {
         // (return `this`) - everything else stays a pure pass-through
         // search, so clicking a HUD's background/label doesn't swallow the
         // click, only clicking an actual interactive widget does.
+        // Children get first refusal (unchanged - an interactive child
+        // wins over an ancestor that's ALSO clickable, e.g. a Checkbox
+        // inside a Row that also has its own onClick). Only once nothing
+        // below matched does this widget check itself: any widget with an
+        // onClick OR onScroll handler set becomes a real hit target this
+        // way, without needing to be a CButtonWidget - see setOnClick()/
+        // setOnScroll() below. Checking onScroll too (not just onClick)
+        // matters - hitTestWidget() is the SAME lookup hover-tracking and
+        // scroll dispatch both go through (InputHook.cpp), so a widget
+        // with only onScroll set (no onClick - e.g. a scroll-driven
+        // custom control) still needs to actually match here, or scroll
+        // would never reach it despite the field being "generically"
+        // accepted. CButtonWidget/CInputWidget/CCheckboxWidget still
+        // override this entirely (unconditional leaf match, regardless of
+        // whether either callback happens to be set) for their own
+        // specific reasons - Button's "always a valid click target
+        // structurally" contract, Input's click-to-focus, Checkbox's
+        // toggle - this default is only what a plain Box/Text/Image/Row/
+        // Column/Stack falls back to.
         virtual CWidget* hitTest(const Vector2D& origin, const Vector2D& point) {
             if (!m_visible)
                 return nullptr;
@@ -162,19 +183,146 @@ namespace HyprLUI {
                 if (auto* hit = (*it)->hitTest(absOrigin, point))
                     return hit;
             }
+
+            if ((m_onClick || m_onScroll) && !m_disabled && boxAt(origin).containsPoint(point))
+                return this;
             return nullptr;
         }
 
         // Whether this widget itself is ever a real hitTest() match (i.e.
         // overrides hitTest() to return `this`) - purely descriptive, used
         // only by the debug overlay's hit-target highlight (Widget.cpp) to
-        // know which widgets to draw it for. Default false; CButtonWidget/
-        // CInputWidget override to true. Deliberately separate from
-        // actually calling hitTest() here, which would need a point to
-        // test against and could recurse - this just answers "is this
-        // widget the KIND of thing that can ever match at all."
+        // know which widgets to draw it for. Default reflects whether THIS
+        // instance actually has an onClick or onScroll handler set
+        // (matching hitTest()'s own default above exactly) -
+        // CButtonWidget/CInputWidget/CCheckboxWidget override to
+        // unconditional `true` instead, same reasoning as their own
+        // hitTest() overrides. Deliberately separate from actually calling
+        // hitTest() here, which would need a point to test against and
+        // could recurse - this just answers "is this widget the KIND of
+        // thing that can ever match at all."
         virtual bool isInteractive() const {
-            return false;
+            return static_cast<bool>(m_onClick) || static_cast<bool>(m_onScroll);
+        }
+
+        // A plain no-argument click callback, available on ANY widget
+        // (not just Button) - see hitTest()'s default above for what
+        // actually makes this functional, not just stored. Same
+        // press-must-land-on-the-same-widget-as-release semantics as
+        // Button always had (InputHook.cpp), now via CUIManager::
+        // clickWidget()'s generic fireClick() fallback rather than a
+        // Button-specific dynamic_cast. Checkbox intentionally does NOT
+        // use this - its click() toggles state and fires onChange(bool)
+        // instead, a different shape; setting onClick on a Checkbox is
+        // harmless but inert (CUIManager::clickWidget() resolves the
+        // CCheckboxWidget branch first and never reaches this fallback).
+        void setOnClick(std::function<void()> fn) {
+            m_onClick = std::move(fn);
+        }
+
+        // Invokes the onClick handler, if any, and reports whether one
+        // was actually set - called by CUIManager::clickWidget() once a
+        // press and its matching release both land on this same widget.
+        bool fireClick() {
+            if (!m_onClick)
+                return false;
+            m_onClick();
+            return true;
+        }
+
+        // Interactive state (Phase 10, DESIGN.md) - shared across every
+        // interactive widget type (CButtonWidget/CInputWidget/
+        // CCheckboxWidget) instead of each reinventing its own hover/
+        // disabled bookkeeping, same "shared base field, only some
+        // subclasses actually interpret it" pattern Phase 7's padding/
+        // margin/opacity/etc. already established. Only meaningful for a
+        // widget whose isInteractive() is true - a decorative Box setting
+        // these does nothing (its hitTest() never matches, so it can
+        // never become hovered/disabled-and-skipped in the first place).
+        //
+        // `disabled`: excludes this widget from hitTest() entirely (see
+        // CButtonWidget/CInputWidget/CCheckboxWidget's own overrides) -
+        // click-through/unfocusable, as if it isn't there for interaction
+        // purposes, while still rendering. A disabled widget can therefore
+        // never become the hovered one either - hover and disabled are
+        // mutually exclusive by construction, not just by convention.
+        void setDisabled(bool disabled) {
+            m_disabled = disabled;
+        }
+        bool disabled() const {
+            return m_disabled;
+        }
+
+        // `hovered`: current hover state, set by CUIManager (via
+        // setHovered()) as the pointer moves - never set directly by a
+        // widget itself. setHovered() both updates the stored flag AND
+        // fires onHoverStart/onHoverEnd on the transition, unlike Input's
+        // focus()/blur() (Phase 6) which don't store any state on the
+        // widget at all - hoverColor's automatic, no-Lua-round-trip
+        // application (see effectiveFillColor() below) is what forces
+        // this one to actually remember its own state, since render()
+        // needs to know it directly.
+        void setHovered(bool hovered) {
+            if (hovered == m_hovered)
+                return;
+            m_hovered = hovered;
+            if (hovered && m_onHoverStart)
+                m_onHoverStart();
+            else if (!hovered && m_onHoverEnd)
+                m_onHoverEnd();
+        }
+        bool hovered() const {
+            return m_hovered;
+        }
+
+        void setHoverColor(const std::optional<CHyprColor>& color) {
+            m_hoverColor = color;
+        }
+        void setDisabledColor(const std::optional<CHyprColor>& color) {
+            m_disabledColor = color;
+        }
+        void setOnHoverStart(std::function<void()> fn) {
+            m_onHoverStart = std::move(fn);
+        }
+        void setOnHoverEnd(std::function<void()> fn) {
+            m_onHoverEnd = std::move(fn);
+        }
+
+        // Picks which color a leaf should actually fill with this frame -
+        // `disabledColor` if disabled and set, else `hoverColor` if
+        // hovered and set, else `base` (the widget's own normal color,
+        // e.g. CButtonWidget's m_color) unchanged. No precedence conflict
+        // between the two overrides is possible (see `disabled`'s doc
+        // comment above - a disabled widget is never the hovered one), so
+        // this is a plain two-step fallback, not a priority system.
+        const CHyprColor& effectiveFillColor(const CHyprColor& base) const {
+            if (m_disabled && m_disabledColor)
+                return *m_disabledColor;
+            if (m_hovered && m_hoverColor)
+                return *m_hoverColor;
+            return base;
+        }
+
+        // Scroll (Phase 10): stays completely inert unless a handler is
+        // explicitly set - matches the "swallow only what's opted into"
+        // philosophy already established for Phase 6's keybind-priority
+        // default. `vertical` is true for the common mouse-wheel axis,
+        // false for horizontal scroll; `delta` is the raw
+        // IPointer::SAxisEvent value forwarded as-is (see InputHook.cpp),
+        // no attempt to normalize/invert it into a "lines scrolled" unit.
+        void setOnScroll(std::function<void(double delta, bool vertical)> fn) {
+            m_onScroll = std::move(fn);
+        }
+
+        // Invokes the onScroll handler, if any, and reports whether one
+        // was actually set - InputHook.cpp only cancels the underlying
+        // mouse.axis event when this returns true, so scroll passes
+        // through untouched to whatever's behind an unhandled widget.
+        bool fireScroll(double delta, bool vertical) {
+            if (!m_onScroll)
+                return false;
+            m_onScroll(delta, vertical);
+            return true;
         }
 
         // Recursive removal by id, starting from this widget's children.
@@ -348,20 +496,26 @@ namespace HyprLUI {
         // widget's own m_size. Default: no-op - right for leaves and for
         // CStackWidget, whose children keep whatever absolute position
         // they were given. Flex containers override this.
-        virtual void          arrangeChildren() {}
+        virtual void                                     arrangeChildren() {}
 
-        std::string           m_id;
-        Vector2D              m_position;
-        Vector2D              m_size;
-        bool                  m_visible = true;
-        std::optional<double> m_fixedW, m_fixedH;
-        std::optional<double> m_minW, m_minH, m_maxW, m_maxH;
-        SEdgeInsets           m_padding, m_margin;
-        double                m_opacity = 1.0;
-        int                   m_zIndex  = 0;
-        SDebugSpec            m_debugSpec;
-        bool                  m_debugCascade = true;
-        std::vector<PWidget>  m_children;
+        std::string                                      m_id;
+        Vector2D                                         m_position;
+        Vector2D                                         m_size;
+        bool                                             m_visible = true;
+        std::optional<double>                            m_fixedW, m_fixedH;
+        std::optional<double>                            m_minW, m_minH, m_maxW, m_maxH;
+        SEdgeInsets                                      m_padding, m_margin;
+        double                                           m_opacity = 1.0;
+        int                                              m_zIndex  = 0;
+        SDebugSpec                                       m_debugSpec;
+        bool                                             m_debugCascade = true;
+        bool                                             m_disabled     = false;
+        bool                                             m_hovered      = false;
+        std::optional<CHyprColor>                        m_hoverColor, m_disabledColor;
+        std::function<void()>                            m_onHoverStart, m_onHoverEnd;
+        std::function<void(double delta, bool vertical)> m_onScroll;
+        std::function<void()>                            m_onClick;
+        std::vector<PWidget>                             m_children;
 
       private:
         // Merges m_debugSpec into `inherited` ("mine wins per-field if

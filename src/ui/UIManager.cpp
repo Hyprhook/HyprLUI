@@ -1,5 +1,4 @@
 #include "UIManager.hpp"
-#include "ButtonWidget.hpp"
 #include "InputWidget.hpp"
 #include "CheckboxWidget.hpp"
 
@@ -30,6 +29,11 @@ namespace HyprLUI {
         // desync as the config-reload issue documented in DESIGN.md.
         if (m_focusedInput.canvasName == name)
             blurFocusedInput();
+        // Same reasoning for hover - onHoverEnd should still fire against
+        // a live widget rather than this canvas's hover tracking silently
+        // going stale.
+        if (m_hoveredWidget.canvasName == name)
+            updateHover({});
 
         auto canvas = std::move(it->second);
         m_canvases.erase(it);
@@ -88,15 +92,18 @@ namespace HyprLUI {
         if (!widget)
             return false;
 
-        if (auto* button = dynamic_cast<CButtonWidget*>(widget)) {
-            button->click();
-            return true;
-        }
+        // Checkbox keeps its own dedicated click() (toggles state, fires
+        // onChange(bool) - a different shape from the generic no-arg
+        // onClick, see Widget.hpp's setOnClick() doc comment). Every
+        // other widget type, including Button now, goes through the
+        // generic fireClick() fallback - Button no longer needs its own
+        // dynamic_cast branch here since it stopped having a separate
+        // onClick mechanism of its own (Phase 10 follow-up, DESIGN.md).
         if (auto* checkbox = dynamic_cast<CCheckboxWidget*>(widget)) {
             checkbox->click();
             return true;
         }
-        return false;
+        return widget->fireClick();
     }
 
     bool CUIManager::focusWidget(const std::string& canvasName, const std::string& widgetId) {
@@ -108,7 +115,7 @@ namespace HyprLUI {
             return false;
 
         auto* input = dynamic_cast<CInputWidget*>(canvas->root()->findWidget(widgetId));
-        if (!input)
+        if (!input || input->disabled())
             return false;
 
         blurFocusedInput(); // no-op if nothing was focused
@@ -171,6 +178,41 @@ namespace HyprLUI {
             focusWidget(hit.canvasName, hit.widgetId); // no-op (false) if hit isn't actually an Input, e.g. a Button
     }
 
+    void CUIManager::updateHover(const SWidgetHit& hit) {
+        if (hit == m_hoveredWidget)
+            return;
+
+        if (!m_hoveredWidget.empty()) {
+            auto canvas = getCanvas(m_hoveredWidget.canvasName);
+            if (canvas && canvas->root()) {
+                if (auto* widget = canvas->root()->findWidget(m_hoveredWidget.widgetId))
+                    widget->setHovered(false);
+            }
+        }
+
+        m_hoveredWidget = hit;
+
+        if (!m_hoveredWidget.empty()) {
+            auto canvas = getCanvas(m_hoveredWidget.canvasName);
+            if (canvas && canvas->root()) {
+                if (auto* widget = canvas->root()->findWidget(m_hoveredWidget.widgetId))
+                    widget->setHovered(true);
+            }
+        }
+    }
+
+    bool CUIManager::dispatchScroll(const std::string& canvasName, const std::string& widgetId, double delta, bool vertical) {
+        auto canvas = getCanvas(canvasName);
+        if (!canvas || !canvas->root())
+            return false;
+
+        auto* widget = canvas->root()->findWidget(widgetId);
+        if (!widget)
+            return false;
+
+        return widget->fireScroll(delta, vertical);
+    }
+
     void CUIManager::renderOverlay() {
         for (const auto& [name, canvas] : m_canvases) {
             if (canvas->zorder() == EZOrder::Overlay)
@@ -200,8 +242,9 @@ namespace HyprLUI {
         // Every widget just got destroyed above - no live CInputWidget
         // left to call blur() on, so just drop the tracking state rather
         // than routing through blurFocusedInput() (which would try to
-        // look it up and find nothing anyway).
-        m_focusedInput = {};
+        // look it up and find nothing anyway). Same reasoning for hover.
+        m_focusedInput  = {};
+        m_hoveredWidget = {};
     }
 
 } // namespace HyprLUI

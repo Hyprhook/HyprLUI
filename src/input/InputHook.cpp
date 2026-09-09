@@ -8,6 +8,7 @@
 #include <hyprland/src/managers/SeatManager.hpp>
 #include <hyprland/src/keybinds/Manager.hpp>
 #include <hyprland/src/helpers/signal/Signal.hpp>
+#include <hyprland/src/pointer/cursor/CursorShapeOverrideController.hpp>
 
 #include <linux/input-event-codes.h>
 
@@ -20,6 +21,8 @@ namespace HyprLUI::InputHook {
     namespace {
         CHyprSignalListener g_buttonListener;
         CHyprSignalListener g_keyListener;
+        CHyprSignalListener g_moveListener;
+        CHyprSignalListener g_axisListener;
 
         // The widget a press hit, if any - re-hit-tested and compared by
         // value (canvas name + widget id, not a raw pointer) at release,
@@ -74,6 +77,53 @@ namespace HyprLUI::InputHook {
                 HyprLUI::CUIManager::get().clickWidget(releaseHit.canvasName, releaseHit.widgetId); // no-op if it's actually an Input, not a Button/Checkbox
 
             g_pressed.reset();
+        }
+
+        // Hover tracking + cursor feedback (Phase 10, DESIGN.md). Purely
+        // observational - `info.cancelled` is never set here - so windows
+        // underneath a HyprLUI overlay still get their own normal hover/
+        // motion behavior; only clicks and (opted-into) scroll are ever
+        // actually swallowed.
+        void onMouseMove(Vector2D, Event::SCallbackInfo& info) {
+            const auto pt  = g_pInputManager->getMouseCoordsInternal();
+            const auto hit = HyprLUI::CUIManager::get().hitTestWidget(pt);
+            HyprLUI::CUIManager::get().updateHover(hit);
+
+            // Pointer::Cursor::overrideController (a header-defined
+            // `inline` global, not an `extern`-declared pointer like every
+            // other Hyprland singleton this project reaches into so far -
+            // verified via a real build + the same nm -D undefined-symbol
+            // check used everywhere else, see DESIGN.md Phase 10) is
+            // Hyprland's own priority-grouped cursor-override mechanism -
+            // CInputManager itself already listens for changes on it and
+            // applies them via setCursorFromName(), so this is additive,
+            // not fighting Hyprland's own cursor state. CURSOR_OVERRIDE_
+            // UNKNOWN is deliberately the LOWEST priority group - a real
+            // window-edge-resize or drag-and-drop cursor should win over
+            // a HUD hover indicator, not get fought with it. setOverride()
+            // with an unchanged name is a cheap no-op internally (the
+            // class's own change-detection, not re-implemented here).
+            if (!hit.empty())
+                Pointer::Cursor::overrideController->setOverride("pointer", Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+            else
+                Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
+        }
+
+        // Scroll (Phase 10) - stays completely inert (event left
+        // uncancelled, passes through to whatever real window is behind
+        // it) unless hit-testing lands on a widget that actually has an
+        // onScroll handler set, matching the "swallow only what's opted
+        // into" philosophy already established for Phase 6's keybind-
+        // priority default.
+        void onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& info) {
+            const auto pt  = g_pInputManager->getMouseCoordsInternal();
+            const auto hit = HyprLUI::CUIManager::get().hitTestWidget(pt);
+            if (hit.empty())
+                return;
+
+            const bool vertical = e.axis == WL_POINTER_AXIS_VERTICAL_SCROLL;
+            if (HyprLUI::CUIManager::get().dispatchScroll(hit.canvasName, hit.widgetId, e.delta, vertical))
+                info.cancelled = true;
         }
 
         // Whether `sym` is a bare modifier keysym (Shift/Ctrl/Alt/Super/
@@ -227,6 +277,8 @@ namespace HyprLUI::InputHook {
     void registerHooks(HANDLE handle) {
         g_buttonListener = Event::bus()->m_events.input.mouse.button.listen(onMouseButton);
         g_keyListener    = Event::bus()->m_events.input.keyboard.key.listen(onKeyboardKey);
+        g_moveListener   = Event::bus()->m_events.input.mouse.move.listen(onMouseMove);
+        g_axisListener   = Event::bus()->m_events.input.mouse.axis.listen(onMouseAxis);
     }
 
     void unregisterHooks(HANDLE handle) {
@@ -234,8 +286,13 @@ namespace HyprLUI::InputHook {
         // releasing our own reference here is cheap and explicit.
         g_buttonListener.reset();
         g_keyListener.reset();
+        g_moveListener.reset();
+        g_axisListener.reset();
         g_pressed.reset();
         g_excludedKeycodes.clear();
+        // Don't leave the cursor stuck as "pointer" if the plugin unloads
+        // mid-hover.
+        Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
     }
 
 } // namespace HyprLUI::InputHook

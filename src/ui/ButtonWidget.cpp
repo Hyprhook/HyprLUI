@@ -7,7 +7,7 @@ namespace HyprLUI {
         if (!m_visible)
             return;
 
-        CHyprColor faded = m_color;
+        CHyprColor faded = effectiveFillColor(m_color);
         faded.a *= parentOpacity * static_cast<float>(m_opacity);
         gfx::drawRect(boxAt(origin), faded, m_rounding);
         // CWidget::render() multiplies in m_opacity itself before handing

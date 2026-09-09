@@ -76,9 +76,10 @@ namespace HyprLUI {
 
       protected:
         // A hit-testing leaf, same reasoning as CButtonWidget - no nested
-        // interactive widgets inside a Checkbox.
+        // interactive widgets inside a Checkbox. Excludes disabled
+        // checkboxes too (Phase 10).
         CWidget* hitTest(const Vector2D& origin, const Vector2D& point) override {
-            if (!m_visible)
+            if (!m_visible || m_disabled)
                 return nullptr;
             return boxAt(origin).containsPoint(point) ? this : nullptr;
         }

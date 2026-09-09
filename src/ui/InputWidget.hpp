@@ -96,9 +96,12 @@ namespace HyprLUI {
 
       protected:
         // A hit-testing leaf, same reasoning as CButtonWidget - no nested
-        // interactive widgets inside an Input.
+        // interactive widgets inside an Input. Excludes disabled inputs
+        // too (Phase 10) - also makes a disabled Input unfocusable, since
+        // click-to-focus goes through this same hit-test (focus_widget()
+        // is separately guarded in CUIManager::focusWidget()).
         CWidget* hitTest(const Vector2D& origin, const Vector2D& point) override {
-            if (!m_visible)
+            if (!m_visible || m_disabled)
                 return nullptr;
             return boxAt(origin).containsPoint(point) ? this : nullptr;
         }

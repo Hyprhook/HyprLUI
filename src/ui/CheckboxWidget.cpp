@@ -11,7 +11,7 @@ namespace HyprLUI {
 
         const float opacity = parentOpacity * static_cast<float>(m_opacity);
 
-        CHyprColor  outer = m_color;
+        CHyprColor  outer = effectiveFillColor(m_color);
         outer.a *= opacity;
         gfx::drawRect(boxAt(origin), outer, m_rounding);
 

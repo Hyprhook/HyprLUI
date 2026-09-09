@@ -74,15 +74,21 @@ namespace HyprLUI {
         SWidgetHit hitTestWidget(const Vector2D& pt) const;
 
         // Invokes a real click on the widget named `widgetId` on canvas
-        // `canvasName`, if both still exist and it's actually a
-        // CButtonWidget or CCheckboxWidget (false, no-op, if it resolves
-        // to something else, e.g. an Input - which grabs focus on PRESS
-        // instead, see handlePressFocus()). Each type's own click()
-        // decides what "a click" means for it (Button: just invoke
-        // onClick; Checkbox: toggle then invoke onChange with the new
-        // value) - this only resolves WHICH type it is and forwards.
-        // Called by InputHook.cpp once a press and its matching release
-        // both resolve to the same SWidgetHit.
+        // `canvasName`, if both still exist and the widget actually
+        // resolved as a hit in the first place (false, no-op, otherwise -
+        // e.g. an Input, which grabs focus on PRESS instead, see
+        // handlePressFocus(), never reaches here as a "click"). Checkbox
+        // gets its own dynamic_cast branch (toggle then invoke
+        // onChange(bool) with the new value - a different shape from a
+        // plain onClick); every other widget type falls through to the
+        // generic CWidget::fireClick() (Phase 10 follow-up, DESIGN.md) -
+        // onClick is a base-CWidget field now, not Button-specific,
+        // though only a widget that ever actually resolves as a
+        // hitTestWidget() hit can reach this call in the first place (see
+        // Widget.hpp's own hitTest()/isInteractive() defaults for what
+        // makes a plain Box/Text/etc. become one: having onClick set at
+        // all). Called by InputHook.cpp once a press and its matching
+        // release both resolve to the same SWidgetHit.
         bool clickWidget(const std::string& canvasName, const std::string& widgetId);
 
         // --- Keyboard focus (Input widgets) ------------------------------
@@ -96,7 +102,10 @@ namespace HyprLUI {
         // `canvasName`, blurring whatever was previously focused first
         // (a no-op re-blur/re-focus if it's already this exact widget -
         // doesn't re-fire onFocus). Returns false (no state change) if no
-        // such canvas/widget exists or it isn't actually a CInputWidget.
+        // such canvas/widget exists, it isn't actually a CInputWidget, or
+        // it's disabled (Phase 10 - a disabled Input can't be focused,
+        // neither by click - hitTest() already excludes it, see
+        // InputWidget.hpp - nor programmatically through this same call).
         // Called both from InputHook.cpp's click-to-focus handling and
         // directly from Lua (hyprlui.focus_widget) for programmatic focus.
         bool focusWidget(const std::string& canvasName, const std::string& widgetId);
@@ -142,6 +151,32 @@ namespace HyprLUI {
         // blurs and stops there).
         void handlePressFocus(const SWidgetHit& hit);
 
+        // --- Hover + scroll (Phase 10) -----------------------------------
+        // A single global "currently hovered" slot, same "compared by
+        // value, not a raw pointer" shape as m_focusedInput - there's only
+        // one real pointer, so only one widget can be hovered at a time.
+        // Called by InputHook.cpp's new mouse.move handler on every move,
+        // with the result of the SAME hitTestWidget() click-hit-testing
+        // already uses (a disabled widget's hitTest() already excludes it,
+        // so it can never resolve as the hovered one either). No-op if
+        // `hit` is already the currently-hovered widget; otherwise calls
+        // setHovered(false) on the old one (if any) and setHovered(true)
+        // on the new one (if any) - each of those fires that widget's own
+        // onHoverStart/onHoverEnd as a side effect (see Widget.hpp).
+        void updateHover(const SWidgetHit& hit);
+
+        bool isHovered(const std::string& canvasName, const std::string& widgetId) const {
+            return !m_hoveredWidget.empty() && m_hoveredWidget.canvasName == canvasName && m_hoveredWidget.widgetId == widgetId;
+        }
+
+        // Forwards a scroll event to the widget at `canvasName`/`widgetId`
+        // (already resolved by InputHook.cpp's hitTestWidget() call) if it
+        // has an onScroll handler set - returns whether it actually fired
+        // one, which is what InputHook.cpp uses to decide whether to
+        // cancel the underlying mouse.axis event (only ever swallowed if
+        // something was actually listening - see CWidget::fireScroll()).
+        bool dispatchScroll(const std::string& canvasName, const std::string& widgetId, double delta, bool vertical);
+
         // --- Frame lifecycle --------------------------------------------
         // Called from the "render" hook once per relevant render stage.
         void renderOverlay();
@@ -157,6 +192,7 @@ namespace HyprLUI {
         std::vector<PCanvas>                     m_pendingRemoval;
         uint64_t                                 m_nextSequence = 0;
         SWidgetHit                               m_focusedInput;
+        SWidgetHit                               m_hoveredWidget;
     };
 
 } // namespace HyprLUI

@@ -1479,25 +1479,166 @@ piece (raw-keysym limitation).
       up (would need render() to accept and re-splice caller-supplied
       children into a placeholder position in its own output, real added
       complexity).
-- [ ] **Phase 10** - Interactive widget layer. Sits above Phase 7's base
-      properties and applies only to the subset of widgets that are
-      actually interactive (`Button`, `Input`, and `Checkbox` once Phase 8
-      lands):
-      - **Hover / focus / disabled state as one shared state machine**,
-        reused across every interactive widget type instead of
-        reimplemented per widget - `Input` already has an ad hoc idea of
-        "focused" (Phase 6's `m_focusedInput`); this generalizes and
-        formalizes that instead of letting each new interactive widget
-        invent its own version.
-      - **Cursor icon changes on hover** - resolves the Phase 4 open-
-        question gap (no pointer/hand cursor feedback on hovering a
-        Button today) using the same `mouse.move` hook and hit-testing
-        infra Phase 4 already built, just not yet wired to fire on
-        movement (only press/release are hooked currently).
-      - **Scroll capture that stays inert by default** - no widget reacts
-        to `mouse.axis` at all unless a handler is explicitly hooked in,
-        matching the "swallow only what's opted into" philosophy already
-        established for Phase 6's keybind-priority default.
+- [x] **Phase 10** - Interactive widget layer: `disabled` state, hover
+      (with automatic `hoverColor`/`disabledColor` application plus
+      `onHoverStart`/`onHoverEnd` callbacks), cursor feedback, and opt-in
+      scroll capture (`onScroll`) - all shared `CWidget` base fields, only
+      actually interpreted by widgets whose `isInteractive()` is true
+      (`Button`/`Input`/`Checkbox`), same "shared base field, selectively
+      used" pattern Phase 7's padding/margin/opacity/etc. already
+      established (not a literal FSM class - three booleanish states with
+      simple, non-overlapping transitions didn't warrant one).
+
+      **Researched before implementing** (same practice as every internal-
+      API-reliant phase): confirmed `mouse.move` (`Cancellable<Vector2D>`)
+      and `mouse.axis` (`Cancellable<IPointer::SAxisEvent>`) already exist
+      in `EventBus.hpp` alongside `mouse.button` in the exact same shape,
+      unused until now. For cursor control, found
+      `Pointer::Cursor::overrideController` (`src/pointer/cursor/
+      CursorShapeOverrideController.hpp`) - a priority-grouped override
+      system genuinely designed for exactly this ("something wants to
+      request a cursor shape without fighting other cursor state, e.g.
+      window-edge-resize or drag-and-drop cursors") - confirmed by reading
+      `CInputManager`'s own constructor, which already listens on its
+      `overrideChanged` signal and applies the result via
+      `setCursorFromName()`, the same call `IHyprRenderer` uses for every
+      other cursor change. `CURSOR_OVERRIDE_UNKNOWN` (the lowest-priority
+      group) is used for HyprLUI's hover cursor on purpose - a real
+      window-edge-resize or drag cursor should win over a HUD hover
+      indicator, not get fought with it.
+
+      **First use of a header-defined `inline` global (not an `extern`-
+      declared pointer like every other Hyprland singleton this project
+      has reached into so far) - verified rather than assumed**:
+      `overrideController` is `inline UP<CShapeOverrideController>
+      overrideController = ...` at namespace scope, a genuinely different
+      cross-shared-library-boundary pattern than `g_pHyprRenderer`/
+      `g_pCompositor`/etc. Confirmed via a real build + `nm -D`: the
+      global itself shows as a defined weak (`V`) symbol in `HyprLUI.so`
+      (standard, correct behavior for an inline variable - every
+      including translation unit gets its own instance, weak-linked so
+      the loader coalesces them with whichever other definition is
+      already present, e.g. Hyprland's own executable's), while
+      `CShapeOverrideController::setOverride()`/`unsetOverride()`
+      themselves show as undefined (`U`) - deferred to resolve against the
+      host process at dlopen time, the exact same mechanism already
+      proven throughout this project for every other internal API call.
+
+      **Design decisions**:
+      - `disabled` excludes a widget from `hitTest()` entirely (added to
+        each of `CButtonWidget`/`CInputWidget`/`CCheckboxWidget`'s own
+        override) - click-through/unfocusable, as if it isn't there for
+        interaction purposes, while it still renders. A direct
+        consequence: hover and disabled can never co-occur (a disabled
+        widget can never resolve as the hovered one, since hit-testing
+        already excludes it) - so `effectiveFillColor()`'s disabled-then-
+        hover fallback has no real precedence ambiguity to resolve, it's
+        just two sequential checks.
+      - `hoverColor`/`disabledColor` are declarative, automatic
+        alternate-color fields (same shape `Checkbox.checkedColor`,
+        Phase 8, already established) rather than callback-only - the
+        common case (a flat color swap) needs zero Lua round-trip.
+        `onHoverStart`/`onHoverEnd` (mirroring `onFocus`/`onBlur`'s shape)
+        remain as the escape hatch for anything beyond that, e.g.
+        changing a SIBLING widget's appearance. This deliberately departs
+        from Phase 6's "expose the hook, let Lua own all the cosmetics"
+        stance for FOCUS - reasoned to be the right call specifically
+        here since hover/disabled naturally reduce to "one alternate
+        fill color" far more often than focus (which is more often a
+        ring/border than a fill swap), and the callback escape hatch is
+        still available for anyone who needs more.
+      - Since `hoverColor` needs to apply automatically inside `render()`
+        (no Lua round-trip), unlike Input's `focus()`/`blur()` (Phase 6),
+        which fire a callback but store no state on the widget at all -
+        `CWidget` gained an actual `bool m_hovered` flag this time,
+        updated via `setHovered()` (called by `CUIManager`, mirrors how
+        `input->focus()`/`blur()` are already invoked externally).
+      - `onScroll` stays completely inert unless set - `InputHook.cpp`'s
+        new `onMouseAxis()` only cancels `mouse.axis` when hit-testing
+        lands on a widget whose `fireScroll()` actually invoked something
+        (`CWidget::fireScroll()` reports whether a handler was set),
+        matching Phase 6's keybind-priority "swallow only what's opted
+        into" philosophy exactly. Scoped to the same interactive widgets
+        reusing the EXISTING `hitTest()` infra as-is (deliberately not
+        opened up to arbitrary widgets like `Box`/`Column`, which would
+        need a wholly separate hit-testing concept - see Open questions).
+      - `mouse.move` is never cancelled (purely observational) - swallowing
+        it would block whatever real window is under a HyprLUI overlay
+        from its own normal hover/motion feedback, an unwanted side
+        effect nothing else in this toolkit does; only click and (opted-
+        into) scroll are ever actually swallowed.
+
+      New `CUIManager::m_hoveredWidget` (an `SWidgetHit`, same "compared
+      by value, not a raw pointer" shape as `m_focusedInput` - there's
+      only one real pointer, so only one widget can be hovered at a time)
+      + `updateHover()`/`isHovered()`/`dispatchScroll()`. `focusWidget()`
+      now also rejects a disabled `Input`. `removeCanvas()`/`clear()`
+      extended to un-hover (fire `onHoverEnd` against a still-live widget)
+      the same way they already blur, for the same "don't let Lua's own
+      state silently go stale" reasoning documented for the config-reload
+      lifecycle bug. `set_widget_visible()`/new `set_widget_disabled()`
+      both un-hover (and, for the latter, blur) a widget that becomes
+      hidden/disabled while currently focused/hovered.
+
+      **Scope note, superseded within the same conversation**: this
+      originally said `onScroll`/hover only worked on `Button`/`Input`/
+      `Checkbox`, with opening it up to arbitrary widgets left as a future
+      "would need a separate hit-testing concept" item. That turned out to
+      be wrong almost immediately - see the `onClick` generalization
+      below, which changes `CWidget`'s own default `hitTest()` to match
+      any widget with `onClick` OR `onScroll` set. Since hover-tracking
+      and scroll dispatch (`InputHook.cpp`) both go through that exact
+      same `hitTestWidget()` lookup, a plain `Box`/`Text`/`Image`/`Row`/
+      `Column`/`Stack` with `onScroll` (or `onClick`) set is now hoverable
+      and scrollable too, no separate concept needed after all - it was
+      already the same mechanism, just not extended to check `onScroll`
+      yet. `hoverColor`/`disabledColor`/`onHoverStart`/`onHoverEnd` all
+      work on such a widget the same way they do on Button/Input/Checkbox.
+
+      **`onClick` generalized from Button-only to a `CWidget` base field,
+      in a same-session follow-up prompted by the user noticing the
+      inconsistency directly**: `onHoverStart`/`onHoverEnd`/`onScroll`
+      were already parsed generically for every widget type (Phase 10, per
+      the whole section above) but silently inert on anything that wasn't
+      already a `Button`/`Input`/`Checkbox`, since only those three
+      overrode `hitTest()` to ever match at all - meanwhile `onClick`
+      itself was still Button-specific (its own private field on
+      `CButtonWidget`, parsed only in `buildWidget()`'s "button" branch).
+      Fixed by moving `onClick` onto `CWidget` itself (`setOnClick()`/
+      `fireClick()`, mirroring `fireScroll()`'s "report whether a handler
+      actually fired" shape) and changing `CWidget`'s DEFAULT `hitTest()`
+      (previously: never matches, pure pass-through) to check children
+      first (unchanged - an interactive descendant still wins over an
+      ancestor that's ALSO clickable), then fall back to matching itself
+      if `(onClick || onScroll)` is set and the widget isn't disabled.
+      `isInteractive()`'s default was updated to match (`onClick ||
+      onScroll`, rather than always `false`) so the debug overlay's hit-
+      target highlight stays accurate for a widget that became interactive
+      this way. `CButtonWidget`/`CInputWidget`/`CCheckboxWidget` keep their
+      own unconditional-leaf-match `hitTest()` overrides unchanged (Button
+      is a real click target even with no `onClick` set at all - that
+      "always structurally clickable" contract predates this change and
+      wasn't worth disturbing) - `CButtonWidget` just stopped having its
+      OWN separate `m_onClick`/`setOnClick()`/`click()`, relying entirely
+      on the inherited generic version instead (name-hiding wasn't a
+      concern once the duplicate was removed, since `buildWidget()`'s
+      common tail calls `setOnClick()` through a `PWidget` = `shared_ptr
+      <CWidget>`-typed variable, which always resolves to the base
+      class's non-virtual method regardless of the pointee's dynamic
+      type - had `CButtonWidget` kept its OWN `setOnClick()` alongside
+      this, that method would have silently SHADOWED the base one for any
+      direct `CButtonWidget*`-typed call, while the common tail's
+      `PWidget`-typed call would still have hit the base version instead -
+      two competing onClick storages on the same object, only one of
+      which `CUIManager::clickWidget()` would ever actually have checked;
+      removing the duplicate rather than adding a second competing field
+      sidesteps that trap entirely). `CUIManager::clickWidget()` keeps its
+      own `dynamic_cast<CCheckboxWidget*>` branch (toggle + `onChange
+      (bool)` is a different shape from a plain no-arg `onClick`, so
+      Checkbox intentionally does NOT use the generic mechanism) but its
+      former `CButtonWidget` branch was removed entirely - Button now
+      falls through to the same generic `widget->fireClick()` every other
+      widget type uses.
 - [ ] **Phase 11** - Persistence and native services architecture. Two
       separate pieces:
       1. **A persistent-variable wrapper to survive Hyprland config
@@ -1580,21 +1721,10 @@ piece (raw-keysym limitation).
   overhead to matter.
 - Phase 4 left several things deliberately out of v1 scope, all additive
   (none require an API-shape decision to add later):
-  - No hover state (`mouse.move` isn't hooked at all yet) - a `Button`
-    can't currently change appearance on mouse-over, or expose an
-    `onHover`. Would need its own damage-triggering considerations (hover
-    changing something visual has to actually get repainted). **User-
-    reported gap (live testing, post-Phase-4)**: there's currently zero
-    cursor feedback on hover either - hovering a Button doesn't switch to
-    a pointer/hand cursor, so nothing on screen signals "this is
-    clickable" before you click it. Same `mouse.move` hook would need to
-    drive this - hit-test on move, and if it's currently over a Button,
-    set the cursor shape (Hyprland exposes cursor-shape control via its
-    cursor manager - would need the equivalent research pass this project
-    did for the monitor/timer/input APIs before implementing) and restore
-    it when it moves off. Same hook, same hit-testing infra Phase 4
-    already built - hover state and cursor feedback are really one
-    feature, not two.
+  - ~~No hover state (`mouse.move` isn't hooked at all yet)~~ - resolved
+    by Phase 10: `hoverColor`/`onHoverStart`/`onHoverEnd` plus automatic
+    pointer-cursor feedback via `Pointer::Cursor::overrideController`,
+    confirming this really was one feature, not two, as predicted here.
   - Right-click/middle-click pass through untouched even over a Button -
     left-click only. A future `onRightClick`/generic `onClick(button)`
     with the physical button code passed through is additive.
