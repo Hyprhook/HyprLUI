@@ -9,25 +9,46 @@ namespace HyprLUI {
                                int textSize, std::string textFont) : CWidget(std::move(id), position), m_color(color), m_rounding(rounding), m_text(std::move(initialText)) {
         m_size = size;
 
-        // Small fixed left padding, roughly vertically centered using the
-        // configured point size as a stand-in for the rasterized text's
-        // actual height (not known until rasterization runs) - good
-        // enough for a single-line field, not exact. Added via addChild()
-        // (not kept purely internal) so it goes through the exact same
-        // measure/arrange/render/hitTest walk as any other child - no
-        // separate rendering path to keep in sync, and Lua-added children
-        // (added after construction, in LuaBridge.cpp's buildWidget())
-        // naturally paint on top of it, same as a Button's label.
-        m_label = std::make_shared<CTextNode>(m_id + "::text", Vector2D{8.0, (size.y - textSize) / 2.0}, m_text, textSize, textColor, textFont);
+        // Small fixed left inset by default so text doesn't touch the
+        // very edge - now expressed as ordinary Phase 7 `padding` (left
+        // only) rather than baked directly into the label's position, so
+        // a Lua-supplied `padding` field (applied via setPadding() after
+        // construction, see LuaBridge.cpp) overrides it like any other
+        // widget's padding. arrangeChildren() below is what actually
+        // positions the label FROM padding() every frame.
+        setPadding({.left = 8});
+
+        // Added via addChild() (not kept purely internal) so it goes
+        // through the exact same measure/arrange/render/hitTest walk as
+        // any other child - no separate rendering path to keep in sync,
+        // and Lua-added children (added after construction, in
+        // LuaBridge.cpp's buildWidget()) naturally paint on top of it,
+        // same as a Button's label. Position is a placeholder - real
+        // placement happens in arrangeChildren() below, every frame.
+        m_label = std::make_shared<CTextNode>(m_id + "::text", Vector2D{0, 0}, m_text, textSize, textColor, textFont);
         addChild(m_label);
     }
 
-    void CInputWidget::render(const Vector2D& origin) {
+    void CInputWidget::render(const Vector2D& origin, float parentOpacity) {
         if (!m_visible)
             return;
 
-        gfx::drawRect(boxAt(origin), m_color, m_rounding);
-        CWidget::render(origin); // draws children (the auto label, plus any Lua-added ones) on top
+        CHyprColor faded = m_color;
+        faded.a *= parentOpacity * static_cast<float>(m_opacity);
+        gfx::drawRect(boxAt(origin), faded, m_rounding);
+        // See CButtonWidget::render()'s comment - pass parentOpacity, not
+        // an already-self-multiplied value, so m_opacity isn't applied to
+        // children twice.
+        CWidget::render(origin, parentOpacity); // draws children (the auto label, plus any Lua-added ones) on top
+    }
+
+    void CInputWidget::arrangeChildren() {
+        // Vertical centering uses the label's own just-measured height
+        // (available by arrange()-time - the whole tree's measure() pass
+        // already completed before arrange() ever starts, see Widget.hpp)
+        // rather than approximating via the configured point size like
+        // the original constructor-time version had to.
+        m_label->setPosition({padding().left, (m_size.y - m_label->size().y) / 2.0});
     }
 
     void CInputWidget::setText(const std::string& text) {

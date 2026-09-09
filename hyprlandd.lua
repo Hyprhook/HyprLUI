@@ -435,6 +435,158 @@ hl.bind("ALT + SHIFT + U", function()
 	end
 end, { description = "HyprLUI: blur whichever Input currently has focus" })
 
+--------------------------------------------------
+---- HYPRLUI BASE WIDGET PROPERTIES TEST (Phase 7) ----
+--------------------------------------------------
+-- Exercises the shared CWidget-level properties every widget type now
+-- has (see DESIGN.md Phase 7 / Widget.hpp): padding, margin, opacity,
+-- zIndex, min/max sizing (+ the text-overflow default it forces), and a
+-- runtime visibility toggle for a single widget (not the whole window).
+
+local HYPRLUI_PROPS_WINDOW = "hyprlui_props_test"
+local hyprluiPropsWindowOpen = false
+local hyprluiLongTextVisible = true
+
+-- ALT + SHIFT + P: toggle the properties test window.
+hl.bind("ALT + SHIFT + P", function()
+	if hyprluiPropsWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_PROPS_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiPropsWindowOpen = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = HYPRLUI_PROPS_WINDOW,
+			anchor = "center",
+			x = 0,
+			y = 80,
+			hl.plugin.hyprlui.Stack({
+				id = "root",
+				w = 320,
+				h = 160,
+				-- Debug overlay (post-Phase-7): `debug = true` here
+				-- cascades to every descendant by default - see "row"
+				-- below for turning that back off for one subtree, and
+				-- "bg" for force-hiding one specific label category on a
+				-- widget that would otherwise auto-show it (it's plenty
+				-- big enough).
+				debug = true,
+				debugFontSize = 7,
+				hl.plugin.hyprlui.Box({
+					id = "bg",
+					x = 0,
+					y = 0,
+					w = 320,
+					h = 160,
+					color = 0x22111111,
+					rounding = 8,
+					debugShow = { size = false },
+				}),
+
+				-- zIndex: "front" is added BEFORE "back" here (so plain
+				-- document order would paint "back" on top), but "front"
+				-- has the higher zIndex - it should still end up on top,
+				-- proving this is a real reorder, not just insertion order.
+				hl.plugin.hyprlui.Box({
+					id = "front",
+					x = 20,
+					y = 16,
+					w = 60,
+					h = 40,
+					color = 0xffcc4444,
+					rounding = 6,
+					zIndex = 2,
+				}),
+				hl.plugin.hyprlui.Box({
+					id = "back",
+					x = 40,
+					y = 30,
+					w = 60,
+					h = 40,
+					color = 0xff4477cc,
+					rounding = 6,
+					zIndex = 1,
+				}),
+
+				-- opacity: same color/size as "front" above, faded to 35% -
+				-- and multiplied with the window's own (default, 1.0)
+				-- opacity, so this is purely this Box's own value.
+				hl.plugin.hyprlui.Box({
+					id = "faded",
+					x = 50,
+					y = 10,
+					w = 60,
+					h = 40,
+					color = 0xffcc4444,
+					rounding = 6,
+					opacity = 0.35,
+					zIndex = 3,
+				}),
+
+				-- padding + margin + gap: a Row with its own container
+				-- padding and a gap between children, where "r2" also
+				-- carries its own extra left margin ON TOP of that gap
+				-- (visibly wider spacing before it than between r1/r3).
+				hl.plugin.hyprlui.Row({
+					id = "row",
+					x = 12,
+					y = 70,
+					gap = 8,
+					padding = 8,
+					-- Walls this subtree off from the root's `debug = true`
+					-- - r1/r2/r3 below show no debug overlay even though
+					-- everything else in the window does.
+					debugCascade = false,
+					hl.plugin.hyprlui.Box({ id = "r1", w = 24, h = 24, color = 0xff88cc88 }),
+					hl.plugin.hyprlui.Box({ id = "r2", w = 24, h = 24, color = 0xff88cc88, margin = { left = 16 } }),
+					hl.plugin.hyprlui.Box({ id = "r3", w = 24, h = 24, color = 0xff88cc88 }),
+				}),
+
+				-- min/max + text overflow: `maxW` here is narrower than the
+				-- text's natural width, so it truncates with an ellipsis -
+				-- the chosen v1 default, gotten from Hyprland's own Pango-
+				-- based text renderer rather than reimplemented (see
+				-- TextNode.cpp). ALT + SHIFT + O below toggles just this
+				-- widget's visibility without touching anything else.
+				hl.plugin.hyprlui.Text({
+					id = "long",
+					x = 12,
+					y = 116,
+					text = "This label is far too long to fit",
+					maxW = 140,
+					color = 0xffffffff,
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.window (props test)", err)
+	else
+		hyprluiPropsWindowOpen = true
+		hyprluiLongTextVisible = true -- matches the widget's fresh default every recreation
+	end
+end, { description = "HyprLUI: toggle the base widget properties test window" })
+
+-- ALT + SHIFT + O: toggle just the truncated "long" Text widget's
+-- visibility via set_widget_visible() - the rest of the window (and that
+-- widget's own state/id) stays alive and unaffected.
+hl.bind("ALT + SHIFT + O", function()
+	if not hyprluiPropsWindowOpen then
+		return
+	end
+	local ok, err =
+		pcall(hl.plugin.hyprlui.set_widget_visible, HYPRLUI_PROPS_WINDOW, "long", not hyprluiLongTextVisible)
+	if not ok then
+		hyprluiWarn("hyprlui.set_widget_visible", err)
+		return
+	end
+	hyprluiLongTextVisible = not hyprluiLongTextVisible
+end, { description = "HyprLUI: toggle the props test's truncated Text widget visible" })
+
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required
 -- w/h fields, so buildWidget() hits requireFieldNumber() -> luaL_error()

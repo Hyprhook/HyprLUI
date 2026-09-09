@@ -44,7 +44,7 @@ namespace HyprLUI {
         CInputWidget(std::string id, const Vector2D& position, const Vector2D& size, CHyprColor color, int rounding = 0, std::string initialText = "",
                      CHyprColor textColor = CHyprColor{1.0, 1.0, 1.0, 1.0}, int textSize = 14, std::string textFont = "sans");
 
-        void render(const Vector2D& origin) override;
+        void render(const Vector2D& origin, float parentOpacity = 1.0F) override;
 
         void setColor(const CHyprColor& color) {
             m_color = color;
@@ -102,6 +102,20 @@ namespace HyprLUI {
                 return nullptr;
             return boxAt(origin).containsPoint(point) ? this : nullptr;
         }
+
+        bool isInteractive() const override {
+            return true;
+        }
+
+        // Repositions the auto-owned label from CURRENT padding()/size()
+        // every arrange() pass (not computed once in the constructor) so a
+        // Lua-supplied `padding` field - applied via setPadding() AFTER
+        // construction, see LuaBridge.cpp's buildWidget() - actually takes
+        // effect, and so vertical centering can use the label's real
+        // measured height (available by arrange()-time, unlike at
+        // construction) instead of the point-size approximation the
+        // original hardcoded-in-the-constructor version had to use.
+        void arrangeChildren() override;
 
       private:
         CHyprColor                              m_color;

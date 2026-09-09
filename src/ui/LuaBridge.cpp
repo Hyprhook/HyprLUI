@@ -50,6 +50,13 @@ namespace HyprLUI::Lua {
             return value;
         }
 
+        // Generic "this numeric field, if the caller actually gave one" -
+        // used for setFixedSize()'s w/h originally, and reused as-is for
+        // every other optional numeric widget property Phase 7 added
+        // (minW/minH/maxW/maxH, opacity, zIndex) - nullopt (as opposed to
+        // some baked-in numeric default) is what lets buildWidget() below
+        // leave a widget's own constructor-chosen default alone when the
+        // Lua spec doesn't mention the field at all.
         std::optional<double> optFixedField(lua_State* L, int idx, const char* key) {
             lua_getfield(L, idx, key);
             std::optional<double> value;
@@ -95,6 +102,20 @@ namespace HyprLUI::Lua {
             return value;
         }
 
+        // Tri-state boolean read - nullopt (as opposed to some baked-in
+        // default) when the field is absent, for fields where "the caller
+        // didn't say anything" is itself a meaningful, distinct state
+        // (e.g. the debug-overlay fields below, where nullopt means
+        // "inherit"/"auto" rather than any concrete true/false).
+        std::optional<bool> optFieldBoolOpt(lua_State* L, int idx, const char* key) {
+            lua_getfield(L, idx, key);
+            std::optional<bool> value;
+            if (!lua_isnil(L, -1))
+                value = static_cast<bool>(lua_toboolean(L, -1));
+            lua_pop(L, 1);
+            return value;
+        }
+
         // `color` fields accept either a packed 0xAARRGGBB integer
         // (matching hl.notification.create's convention) or a table
         // { r, g, b, a } with components in [0, 1].
@@ -124,6 +145,45 @@ namespace HyprLUI::Lua {
 
             luaL_error(L, "%s: field '%s' must be a number or table {r, g, b, a}", fnName, key);
             return def; // unreachable - silences -Wreturn-type
+        }
+
+        // `padding`/`margin` fields (Phase 7) accept either a single
+        // number (applied uniformly to all four sides, the common case)
+        // or a table { top, right, bottom, left } (each defaulting to 0
+        // when only some sides are given - CSS shorthand-table
+        // convention, not the widget's own overall default). Returns
+        // nullopt if the field is absent entirely, so buildWidget() below
+        // can leave a widget's own constructor-chosen default (e.g.
+        // CInputWidget's built-in left padding) alone rather than
+        // clobbering it with an all-zero SEdgeInsets{} just because the
+        // Lua spec didn't mention the field.
+        std::optional<SEdgeInsets> optInsetsField(lua_State* L, int idx, const char* key, const char* fnName) {
+            lua_getfield(L, idx, key);
+
+            if (lua_isnil(L, -1)) {
+                lua_pop(L, 1);
+                return std::nullopt;
+            }
+
+            if (lua_isnumber(L, -1)) {
+                const auto v = static_cast<double>(lua_tonumber(L, -1));
+                lua_pop(L, 1);
+                return SEdgeInsets{v, v, v, v};
+            }
+
+            if (lua_istable(L, -1)) {
+                const int   tblIdx = lua_gettop(L);
+                SEdgeInsets result;
+                result.top    = fieldNumber(L, tblIdx, "top", 0);
+                result.right  = fieldNumber(L, tblIdx, "right", 0);
+                result.bottom = fieldNumber(L, tblIdx, "bottom", 0);
+                result.left   = fieldNumber(L, tblIdx, "left", 0);
+                lua_pop(L, 1);
+                return result;
+            }
+
+            luaL_error(L, "%s: field '%s' must be a number or table {top, right, bottom, left}", fnName, key);
+            return std::nullopt; // unreachable - silences -Wreturn-type
         }
 
         // If the table at `idx`.`key` is a hyprlui.Bind(name) marker table
@@ -405,7 +465,6 @@ namespace HyprLUI::Lua {
 
             } else if (type == "row" || type == "column") {
                 const double gap      = fieldNumber(L, idx, "gap", 0);
-                const double padding  = fieldNumber(L, idx, "padding", 0);
                 const auto   alignStr = optFieldString(L, idx, "align", "start");
                 EAlign       align    = EAlign::Start;
                 if (alignStr == "center")
@@ -414,13 +473,71 @@ namespace HyprLUI::Lua {
                     align = EAlign::End;
                 else if (alignStr != "start")
                     luaL_error(L, "hyprlui.%s: 'align' must be 'start', 'center', or 'end', got '%s'", type.c_str(), alignStr.c_str());
-                widget = std::make_shared<CFlexWidget>(id, Vector2D{x, y}, type == "row" ? EFlexDirection::Row : EFlexDirection::Column, gap, padding, align);
+                widget = std::make_shared<CFlexWidget>(id, Vector2D{x, y}, type == "row" ? EFlexDirection::Row : EFlexDirection::Column, gap, align);
 
             } else {
                 luaL_error(L, "hyprlui: unknown widget type '%s'", type.c_str());
             }
 
             widget->setVisible(visible);
+
+            // Base widget properties (Phase 7, DESIGN.md) - shared across
+            // every widget type via CWidget itself, so parsed generically
+            // here rather than per-type above. Each is only actually
+            // applied if the Lua spec mentions it at all (see
+            // optInsetsField()/optFixedField()'s doc comments) - so a
+            // widget whose constructor already chose a sensible built-in
+            // default (e.g. CInputWidget's left padding) keeps it instead
+            // of getting silently zeroed out just because the spec didn't
+            // repeat it.
+            if (auto padding = optInsetsField(L, idx, "padding", "hyprlui"))
+                widget->setPadding(*padding);
+            if (auto margin = optInsetsField(L, idx, "margin", "hyprlui"))
+                widget->setMargin(*margin);
+
+            const auto minW = optFixedField(L, idx, "minW");
+            const auto minH = optFixedField(L, idx, "minH");
+            if (minW || minH)
+                widget->setMinSize(minW, minH);
+
+            const auto maxW = optFixedField(L, idx, "maxW");
+            const auto maxH = optFixedField(L, idx, "maxH");
+            if (maxW || maxH)
+                widget->setMaxSize(maxW, maxH);
+
+            if (auto opacity = optFixedField(L, idx, "opacity"))
+                widget->setOpacity(*opacity);
+            if (auto zIndex = optFixedField(L, idx, "zIndex"))
+                widget->setZIndex(static_cast<int>(*zIndex));
+
+            // Debug overlay (post-Phase-7 addition, DESIGN.md) - `debug`
+            // is tri-state (absent = inherit from the nearest ancestor
+            // that hasn't walled itself off, see debugCascade below);
+            // `debugShow` forces individual detail categories on/off,
+            // bypassing the size-based "auto" default (see Widget.cpp's
+            // drawDebugOverlay()) - any category left out of the table
+            // stays auto/inherited, same "only touch what's mentioned"
+            // convention as every other field here.
+            SDebugSpec debugSpec;
+            debugSpec.enabled = optFieldBoolOpt(L, idx, "debug");
+            lua_getfield(L, idx, "debugShow");
+            if (lua_istable(L, -1)) {
+                const int showIdx       = lua_gettop(L);
+                debugSpec.showBox       = optFieldBoolOpt(L, showIdx, "box");
+                debugSpec.showPadding   = optFieldBoolOpt(L, showIdx, "padding");
+                debugSpec.showMargin    = optFieldBoolOpt(L, showIdx, "margin");
+                debugSpec.showId        = optFieldBoolOpt(L, showIdx, "id");
+                debugSpec.showSize      = optFieldBoolOpt(L, showIdx, "size");
+                debugSpec.showZOpacity  = optFieldBoolOpt(L, showIdx, "zOpacity");
+                debugSpec.showHitTarget = optFieldBoolOpt(L, showIdx, "hitTarget");
+            } else if (!lua_isnil(L, -1)) {
+                luaL_error(L, "hyprlui: field 'debugShow' must be a table");
+            }
+            lua_pop(L, 1);
+            if (auto fontSize = optFixedField(L, idx, "debugFontSize"))
+                debugSpec.fontSize = static_cast<int>(*fontSize);
+            widget->setDebug(debugSpec);
+            widget->setDebugCascade(optFieldBool(L, idx, "debugCascade", true));
 
             // Fixed-size override, meaningful only for containers - Box's
             // w/h above are its actual (required) dimensions, not an
@@ -706,6 +823,31 @@ namespace HyprLUI::Lua {
             return 0;
         }
 
+        int luaSetWidgetVisible(lua_State* L) {
+            const std::string canvasName = luaL_checkstring(L, 1);
+            const std::string id         = luaL_checkstring(L, 2);
+            const bool        visible    = lua_toboolean(L, 3);
+
+            auto              canvas = CUIManager::get().getCanvas(canvasName);
+            if (!canvas || !canvas->root())
+                return luaL_error(L, "hyprlui.set_widget_visible: no window named '%s'", canvasName.c_str());
+
+            auto* widget = canvas->root()->findWidget(id);
+            if (!widget)
+                return luaL_error(L, "hyprlui.set_widget_visible: no widget '%s' in window '%s'", id.c_str(), canvasName.c_str());
+
+            // Same reasoning as set_canvas_visible() - hiding a widget
+            // that happens to be the focused Input blurs it first, rather
+            // than leaving it invisible yet still silently holding
+            // HyprLUI's keyboard focus.
+            if (!visible && CUIManager::get().isFocused(canvasName, id))
+                CUIManager::get().blurFocusedInput();
+
+            widget->setVisible(visible);
+            canvas->damage();
+            return 0;
+        }
+
         int luaSetInputText(lua_State* L) {
             const std::string canvasName = luaL_checkstring(L, 1);
             const std::string id         = luaL_checkstring(L, 2);
@@ -813,6 +955,7 @@ namespace HyprLUI::Lua {
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "window", &luaWindow);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "remove_canvas", &luaRemoveCanvas);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_canvas_visible", &luaSetCanvasVisible);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_widget_visible", &luaSetWidgetVisible);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_text", &luaSetText);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_input_text", &luaSetInputText);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "get_input_text", &luaGetInputText);
@@ -835,6 +978,7 @@ namespace HyprLUI::Lua {
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "window");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "remove_canvas");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_canvas_visible");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_widget_visible");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_text");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_input_text");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "get_input_text");

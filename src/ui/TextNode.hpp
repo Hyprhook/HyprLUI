@@ -15,11 +15,12 @@ namespace HyprLUI {
 
     class CTextNode : public CWidget {
       public:
-        CTextNode(std::string id, const Vector2D& position, std::string text, int pointSize = 16, CHyprColor color = CHyprColor{1.0, 1.0, 1.0, 1.0}, std::string fontFamily = "sans");
+        CTextNode(std::string id, const Vector2D& position, std::string text, int pointSize = 16, CHyprColor color = CHyprColor{1.0, 1.0, 1.0, 1.0},
+                  std::string fontFamily = "sans");
 
-        void render(const Vector2D& origin) override;
+        void               render(const Vector2D& origin, float parentOpacity = 1.0F) override;
 
-        void setText(const std::string& text);
+        void               setText(const std::string& text);
         const std::string& text() const {
             return m_text;
         }
@@ -41,15 +42,15 @@ namespace HyprLUI {
         void markDirty() {
             m_dirty = true;
         }
-        void rebuildTexture();
+        void            rebuildTexture();
 
-        std::string  m_text;
-        int          m_pointSize;
-        CHyprColor   m_color;
-        std::string  m_fontFamily;
+        std::string     m_text;
+        int             m_pointSize;
+        CHyprColor      m_color;
+        std::string     m_fontFamily;
 
         SP<HyprTexture> m_texture;
-        bool         m_dirty = true;
+        bool            m_dirty = true;
     };
 
 } // namespace HyprLUI

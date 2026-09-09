@@ -61,6 +61,15 @@ namespace HyprLUI {
 
         m_root->arrange();
         m_root->render(m_position);
+
+        // Debug overlay (box-model outlines/labels) is an entirely
+        // separate pass, run AFTER normal content so it always paints on
+        // top regardless of any widget's own z-index/opacity - it's
+        // diagnostic, not real content. A fresh SDebugSpec{} here means
+        // "nothing enabled, everything auto" at the root; a widget only
+        // actually draws anything once it (or an ancestor that hasn't
+        // walled itself off) sets `debug = true`.
+        m_root->renderDebug(m_position, {});
     }
 
     void CCanvas::damage() {

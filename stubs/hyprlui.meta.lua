@@ -43,16 +43,80 @@
 ---@alias HyprLUI.WatcherFn fun(): any
 ---@alias HyprLUI.WatchFn fun(name: string, fn: HyprLUI.WatcherFn, opts?: HyprLUI.WatchOptions): nil
 
--- Fields shared by every widget constructor table. `x`/`y` are honored by
--- Stack children (absolute positioning) and ignored by Row/Column children
--- (arrange() overwrites them). Numeric entries ([1], [2], ...) are child
--- widgets - see HyprLUI.WidgetSpec below.
+-- Either a single number (applied to all four sides) or a table with any
+-- subset of sides given (an omitted side defaults to 0, NOT to whatever
+-- the uniform-number form would have used) - same convention `color`
+-- already uses for its two accepted shapes.
+---@alias HyprLUI.EdgeInsets number|{top?: number, right?: number, bottom?: number, left?: number}
+
+-- Fields shared by every widget constructor table (Phase 7, DESIGN.md).
+-- `x`/`y` are honored by Stack children (absolute positioning) and ignored
+-- by Row/Column children (arrange() overwrites them). Numeric entries
+-- ([1], [2], ...) are child widgets - see HyprLUI.WidgetSpec below.
+--
+-- `padding` insets a CONTAINER's own children from its edges - only Row/
+-- Column and Input's auto-owned label currently interpret it; Stack's
+-- manual/absolute positioning leaves it unused by design. `margin` is a
+-- widget's own requested space around ITSELF, read by whichever container
+-- lays it out - only Row/Column currently read a child's margin (added on
+-- top of `gap`, CSS-flexbox-item style), Stack again leaves it unused.
+--
+-- `minW`/`minH`/`maxW`/`maxH` clamp the measured size on each axis
+-- independently (either bound may be omitted) - applied after any fixed
+-- w/h override, same precedence CSS gives min/max-width. A `Text` whose
+-- content doesn't fit `maxW` truncates with an ellipsis (Hyprland's own
+-- Pango-based text renderer already does this given a max width - the
+-- chosen v1 overflow default, see DESIGN.md Phase 7); `minW`/`minH` widen
+-- the layout box without stretching a Text's rendered glyphs.
+--
+-- `opacity` (0-1, default 1) multiplies with every ancestor's own opacity
+-- - a semi-transparent container fades its children too, not just itself.
+--
+-- `zIndex` (default 0) reorders paint order among a widget's OWN siblings
+-- only (higher paints later/on top) - not a full CSS stacking-context
+-- system, just a sibling-local override of plain insertion order.
+--
+-- `debug`/`debugCascade`/`debugShow` - box-model debug overlay (outlines +
+-- small labels for padding/margin/id/size/opacity-zIndex, plus a fill over
+-- interactive widgets' hit-target area), drawn on top of everything else,
+-- unaffected by the widget's own opacity/zIndex. `debug` is tri-state:
+-- omitted means "inherit whatever the nearest ancestor resolved to" (the
+-- window root inherits `false`), `true`/`false` is an explicit override
+-- that itself cascades to descendants the same way. `debugCascade`
+-- (default true) walls a subtree off from that inheritance entirely when
+-- `false` - neither this widget's own `debug` value nor anything above it
+-- reaches its children, who start fresh. `debugShow` force-overrides
+-- individual detail categories on/off; any category left out stays "auto"
+-- (shown only once the widget is big enough to render it legibly, and -
+-- for `zOpacity` only - only when opacity/zIndex are actually non-default)
+-- unless some ancestor already forced it via inheritance.
 ---@class HyprLUI.WidgetCommon
 ---@field id? string
 ---@field x? number
 ---@field y? number
 ---@field visible? boolean
+---@field padding? HyprLUI.EdgeInsets
+---@field margin? HyprLUI.EdgeInsets
+---@field minW? number
+---@field minH? number
+---@field maxW? number
+---@field maxH? number
+---@field opacity? number
+---@field zIndex? integer
+---@field debug? boolean
+---@field debugCascade? boolean
+---@field debugShow? HyprLUI.DebugShow
+---@field debugFontSize? integer
 ---@field [integer] HyprLUI.WidgetSpec
+
+---@class HyprLUI.DebugShow
+---@field box? boolean
+---@field padding? boolean
+---@field margin? boolean
+---@field id? boolean
+---@field size? boolean
+---@field zOpacity? boolean
+---@field hitTarget? boolean
 
 ---@class HyprLUI.BoxSpec : HyprLUI.WidgetCommon
 ---@field w number
@@ -72,13 +136,14 @@
 ---@field w? number
 ---@field h? number
 
--- Flexbox-lite: packs children along the row/column axis. No wrap, no
--- justify/space-between (v1 scope - see DESIGN.md).
+-- Flexbox-lite: packs children along the row/column axis. `padding` (from
+-- WidgetCommon) insets from the container's own edges; a child's own
+-- `margin` (also WidgetCommon) adds extra space around itself on top of
+-- `gap`. No wrap, no justify/space-between (v1 scope - see DESIGN.md).
 ---@class HyprLUI.FlexSpec : HyprLUI.WidgetCommon
 ---@field w? number
 ---@field h? number
 ---@field gap? number
----@field padding? number
 ---@field align? HyprLUI.Align
 
 ---@alias HyprLUI.OnClickFn fun()
@@ -161,6 +226,7 @@
 ---@field Input fun(spec: HyprLUI.InputSpec): HyprLUI.InputSpec
 ---@field remove_canvas fun(name: string): nil
 ---@field set_canvas_visible fun(name: string, visible: boolean): nil
+---@field set_widget_visible fun(window: string, id: string, visible: boolean): nil
 ---@field set_text fun(window: string, id: string, text: string): nil
 ---@field set_input_text fun(window: string, id: string, text: string): nil
 ---@field get_input_text fun(window: string, id: string): string

@@ -6,12 +6,19 @@
 //
 //   CStackWidget - manual/absolute positioning, the escape hatch. Children
 //     keep whatever position they were constructed with; the stack's own
-//     size-to-content is just the bounding box of its children.
+//     size-to-content is just the bounding box of its children. Does NOT
+//     interpret its own padding() or a child's margin() (Phase 7,
+//     Widget.hpp) - manual positioning already gives full control over
+//     spacing, and silently offsetting explicit x/y would be surprising.
 //
 //   CFlexWidget - flexbox-lite Row/Column. Packs children along one axis
-//     with a gap, applies padding on all sides, and aligns children on the
-//     cross axis (start/center/end). No wrap, no justify/space-between -
-//     deliberately out of scope for v1 (see DESIGN.md open questions).
+//     with a gap, insets from its own padding() (Phase 7's per-side
+//     CWidget::padding(), replacing this class's earlier private uniform
+//     double), additionally spaces each child out by its own margin()
+//     (also Phase 7 - read per-child, CSS-flexbox-item style: adds to,
+//     doesn't replace, `gap`), and aligns children on the cross axis
+//     (start/center/end). No wrap, no justify/space-between - deliberately
+//     out of scope for v1 (see DESIGN.md open questions).
 
 #include "Widget.hpp"
 
@@ -38,8 +45,13 @@ namespace HyprLUI {
 
     class CFlexWidget : public CWidget {
       public:
-        CFlexWidget(std::string id, const Vector2D& position, EFlexDirection direction, double gap = 0, double padding = 0, EAlign align = EAlign::Start) :
-            CWidget(std::move(id), position), m_direction(direction), m_gap(gap), m_padding(padding), m_align(align) {}
+        // `padding` is no longer a constructor param - it's set via the
+        // base CWidget::setPadding() like any other widget's (see
+        // LuaBridge.cpp's buildWidget()), which is what let it become a
+        // shared, per-side base property in Phase 7 instead of a private
+        // uniform double duplicated here.
+        CFlexWidget(std::string id, const Vector2D& position, EFlexDirection direction, double gap = 0, EAlign align = EAlign::Start) :
+            CWidget(std::move(id), position), m_direction(direction), m_gap(gap), m_align(align) {}
 
       protected:
         void measureContent() override;
@@ -48,7 +60,6 @@ namespace HyprLUI {
       private:
         EFlexDirection m_direction;
         double         m_gap;
-        double         m_padding;
         EAlign         m_align;
     };
 

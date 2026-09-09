@@ -32,7 +32,7 @@ namespace HyprLUI {
             m_size = size;
         }
 
-        void render(const Vector2D& origin) override;
+        void render(const Vector2D& origin, float parentOpacity = 1.0F) override;
 
         void setColor(const CHyprColor& color) {
             m_color = color;
@@ -61,6 +61,10 @@ namespace HyprLUI {
             if (!m_visible)
                 return nullptr;
             return boxAt(origin).containsPoint(point) ? this : nullptr;
+        }
+
+        bool isInteractive() const override {
+            return true;
         }
 
       private:

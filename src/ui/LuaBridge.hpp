@@ -9,17 +9,99 @@
 // nest via plain Lua table-literal syntax - `Column{ gap = 8, Text{...} }`
 // puts the Text{} result at index 1 of the Column table):
 //
+// Every widget table below also accepts the shared Phase 7 "base widget
+// properties" fields, on top of whatever's listed for its own type:
+//
+//   padding, margin
+//     Either a single number (all four sides) or a table
+//     { top, right, bottom, left } (an omitted side is 0 - NOT the uniform
+//     value, same "shorthand table" convention `color`'s table form
+//     already has). `padding` insets a CONTAINER's own children from its
+//     edges - only Row/Column and Input's auto-owned label currently
+//     interpret it; Stack's manual/absolute positioning leaves it unused
+//     by design (full manual control already covers it). `margin` is a
+//     widget's own requested space around ITSELF, read by whichever
+//     container lays it out - only Row/Column currently read a child's
+//     margin (added ON TOP of `gap`, CSS-flexbox-item convention: the
+//     visible gap between two adjacent items ends up being gap + one
+//     item's trailing margin + the next item's leading margin), Stack
+//     again leaves it unused.
+//
+//   minW, minH, maxW, maxH
+//     Clamp the measured size on each axis independently after any fixed
+//     w/h override (same precedence CSS gives min/max-width over an
+//     explicit width). Forces a decision for `Text`: content that doesn't
+//     fit `maxW` truncates with an ellipsis - Hyprland's own Pango-based
+//     text renderer already does this given a max width, so this is
+//     gotten essentially for free rather than reimplemented (wrap/clip
+//     modes aren't wired up - not needed once a default was picked, see
+//     DESIGN.md Phase 7). `minW`/`minH` widen the LAYOUT box without
+//     stretching a Text's rendered glyphs to fill it (they draw at their
+//     own natural size, leaving empty space beside them) - every other
+//     widget type just gets visually bigger, since a flat rect has no
+//     "native size" to distort.
+//
+//   opacity
+//     0-1, default 1. Multiplies with every ANCESTOR's own opacity, not
+//     independent/absolute - a semi-transparent container fades its
+//     children too, standard CSS/Qt/every-toolkit convention.
+//
+//   zIndex
+//     Integer, default 0. Reorders paint order among a widget's OWN
+//     siblings only (higher paints later/on top; ties keep insertion
+//     order, so this is a pure additive extension of "later child wins"
+//     with zero behavior change when unused) - not a full CSS stacking-
+//     context system, a low-zIndex child of a high-zIndex widget still
+//     paints "inside" its parent's turn, it can't jump above a sibling of
+//     a *different* parent.
+//
+//   debug, debugCascade, debugShow
+//     Box-model debug overlay - outlines for the margin/content/padding
+//     boxes, small labels (padding/margin values, id, WxH, non-default
+//     zIndex/opacity), and a translucent fill over an interactive
+//     widget's actual hit-target area. Drawn as a separate pass AFTER
+//     everything else, so it's always fully visible regardless of the
+//     widget's own opacity/zIndex.
+//
+//     `debug` is tri-state: omitted means "inherit whatever the nearest
+//     ancestor resolved to" (a window's root inherits `false`); an
+//     explicit `true`/`false` overrides that for this widget AND
+//     cascades to its own descendants the same way, until something
+//     deeper overrides it again. `debugCascade` (boolean, default true)
+//     walls a subtree off from that inheritance when set to `false` -
+//     neither this widget's own `debug` value nor anything inherited
+//     from further up reaches its children; they start completely fresh.
+//     Use it either to debug one widget without lighting up its whole
+//     subtree, or the reverse - leave one branch alone while debug is on
+//     above it.
+//
+//     `debugShow = { box, padding, margin, id, size, zOpacity, hitTarget }`
+//     (all optional booleans) force-overrides individual detail
+//     categories on/off, bypassing the automatic "only show once this
+//     widget is big enough to render it legibly" default (and, for
+//     `zOpacity` only, the additional "only when opacity/zIndex are
+//     actually non-default" default) - a category left out of the table
+//     stays on that automatic behavior, inherited/cascaded the same way
+//     as `debug` itself.
+//
+//     `debugFontSize` (integer, default 10) is the point size for every
+//     label this widget draws - same inheritance as `debug`/`debugShow`
+//     (nullopt = inherit; set once near the root to size the whole
+//     tree's overlay text at once, or override it deeper down for one
+//     branch).
+//
 //   Stack{ id, x = 0, y = 0, w, h, visible, <children...> }
 //     Manual/absolute positioning - each child keeps whatever x/y it was
 //     given. Size-to-content is the bounding box of its children unless
 //     w/h are given.
 //
-//   Row{ id, x = 0, y = 0, w, h, visible, gap = 0, padding = 0,
+//   Row{ id, x = 0, y = 0, w, h, visible, gap = 0,
 //        align = "start"|"center"|"end", <children...> }
 //   Column{ ...same fields... }
 //     Flexbox-lite: packs children along the row/column axis with `gap`
-//     between them and `padding` on all sides; `align` controls cross-axis
-//     alignment. No wrap, no justify/space-between (v1 scope).
+//     between them (see `margin` above for adding more, per-child);
+//     `align` controls cross-axis alignment. No wrap, no justify/
+//     space-between (v1 scope).
 //
 //   Text{ id, x = 0, y = 0, text, size = 16, color, font = "sans", visible }
 //   Box{ id, x = 0, y = 0, w, h, color, rounding = 0, visible }
@@ -52,9 +134,11 @@
 //     default - typing appends a character, Backspace removes the last
 //     one, and the current text renders automatically (an internally-
 //     owned Text label, styled by `textColor`/`textSize`/`textFont`,
-//     positioned with a small fixed padding - not one of the positional
-//     `<children...>`, though those still layer on top of it same as a
-//     Button's label does). `text` seeds the initial content. None of
+//     inset by a small left `padding` by default (8px - overridable like
+//     any other widget's `padding` field above) and vertically centered -
+//     not one of the positional `<children...>`, though those still layer
+//     on top of it same as a Button's label does). `text` seeds the
+//     initial content. None of
 //     that capture/display/removal is something a caller has to build -
 //     see DESIGN.md Phase 6 for why an earlier version left it as a "type
 //     this yourself on top of onKey" exercise and why that turned out to
@@ -204,6 +288,16 @@
 //
 //   set_canvas_visible(name, visible)
 //     Shows/hides a window without destroying its content.
+//
+//   set_widget_visible(window, id, visible)
+//     Shows/hides a single widget (and its subtree) within an existing
+//     window - same "toggle without destroying/recreating" idea as
+//     set_canvas_visible() above, one level down. The widget's own state
+//     (text content, children, id) is untouched either way, it just stops
+//     being drawn/hit-tested while hidden (same `visible` mechanism every
+//     widget's constructor-time `visible` field already sets - this is
+//     just the runtime mutator for it). Hiding the currently-focused Input
+//     blurs it first, same reasoning as set_canvas_visible().
 //
 //   set_text(window, id, text)
 //     Updates an existing Text widget's content in place.

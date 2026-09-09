@@ -976,12 +976,331 @@ piece (raw-keysym limitation).
       after live re-testing both directions (`focus_widget`/`blur_widget`
       keybinds), unlike the previous two rounds - this one actually
       resolved it.
-- [ ] **Phase 7** (stretch) - Fade animations via Hyprland's animation
+- [x] **Phase 7** - Base widget properties: padding, margin, min/max
+      sizing (+ the text-overflow decision it forced), opacity, z-index,
+      and a per-widget runtime visibility toggle. All six now live directly
+      on `CWidget` (`Widget.hpp`) - shared by every widget type, not
+      reimplemented per subclass.
+
+      **Three sub-decisions resolved up front** (asked via three targeted
+      questions, same "surface the call before implementing, don't guess"
+      practice as every prior phase):
+      1. Text overflow default: **truncate with ellipsis** over wrap or
+         hard clip.
+      2. Margin vs. the existing container `gap`: **kept separate** - a
+         new per-widget `margin` (CSS-flexbox-item style, read by the
+         container laying the widget out) that ADDS to `gap`, rather than
+         merging the two concepts into one.
+      3. Opacity composition: **multiply** with every ancestor's own
+         opacity (CSS/Qt/every-toolkit convention), not override/
+         independent.
+
+      **Padding**: promoted from a private uniform `double` that only
+      `CFlexWidget` had (Phase 1) to a shared `SEdgeInsets{top, right,
+      bottom, left}` on `CWidget` itself (`setPadding()`/`padding()`) -
+      this is the reconciliation the phase's own kickoff note flagged as
+      needed, done by generalizing the existing field rather than adding a
+      second one alongside it. Only `CFlexWidget` (insets its own children
+      from its edges, `ContainerWidget.cpp`) and `CInputWidget` (insets its
+      auto-owned label, replacing a hardcoded `8.0` left-offset literal
+      with `setPadding({.left = 8})` as its own constructor-time default -
+      see below) actually interpret it; `CStackWidget`'s manual/absolute
+      positioning leaves it unused by design, documented directly in
+      `ContainerWidget.hpp` - full manual control already covers spacing
+      there, and silently offsetting explicit x/y would be surprising.
+
+      **Margin**: new `SEdgeInsets` field on `CWidget`, read only by
+      `CFlexWidget` (a child's own margin, not the container's) - added on
+      top of `gap` in both `measureContent()` (main-axis sum includes each
+      child's leading+trailing margin; cross-axis max includes it too) and
+      `arrangeChildren()` (position offset advances by
+      `mainLead + childMain + mainTrail + gap`; cross-axis alignment
+      subtracts `crossLead + crossTrail` from the space it aligns within,
+      so Center/End respect an asymmetric margin correctly, not just a
+      symmetric one). `CStackWidget` leaves it unused, same reasoning as
+      padding above.
+
+      **Min/max sizing**: `setMinSize()`/`setMaxSize()` on `CWidget`,
+      clamped in `measure()` AFTER the existing fixed-size override (same
+      precedence CSS gives min/max-width over an explicit width - "never
+      smaller/larger than this" is a stronger constraint than "this size"
+      once both are given). This is what forced the text-overflow decision:
+      `CTextNode::rebuildTexture()` now forwards `maxW` straight into
+      `gfx::makeTextTexture()`'s existing (previously always-0, unused)
+      `maxWidth` parameter - which Hyprland's own `IHyprRenderer::
+      renderText()` (`Renderer.cpp:1583`) already truncates-with-ellipsis
+      given one (`pango_layout_set_width()` + `pango_layout_set_ellipsize
+      (..., PANGO_ELLIPSIZE_END)`, confirmed by reading it before
+      implementing). The chosen default came essentially for free from
+      Hyprland's own text renderer rather than needing to be built - wrap/
+      clip modes were never wired up, since only one mode was needed once a
+      default was picked. **A real correctness issue found and fixed
+      before it could surface live**: `CTextNode::render()` originally drew
+      via `boxAt(origin)` (the LAYOUT box, `m_size` - which `minW`/`minH`
+      can widen beyond the rasterized texture's native size), and
+      Hyprland's texture pass element scales its source to fill whatever
+      box it's given - so a min-widened Text would have visibly
+      stretched/blurred its own glyphs to fill the extra space, the wrong
+      behavior every other toolkit avoids for text specifically (min-width
+      reserves empty layout space, it doesn't stretch content). Fixed by
+      drawing at `{origin + m_position, m_texture->m_size}` - the
+      texture's own native size - instead, which is a no-op difference
+      whenever they're already equal (the common case, and always true
+      when `maxW`, not `minW`, is what's active, since Pango already
+      rasterizes to fit that exactly).
+
+      **Opacity**: `CWidget::render()`'s signature gained a
+      `float parentOpacity = 1.0F` parameter - the already-composed
+      opacity of every ancestor - multiplied by this widget's own
+      `m_opacity` before being used (for a leaf: faded straight into
+      `CHyprColor.a` for `CRectNode`/`CButtonWidget`/`CInputWidget`'s flat
+      fills, or passed as `gfx::drawTexture()`'s existing separate `alpha`
+      parameter for `CTextNode`) and threaded down to children. **A
+      double-multiplication bug caught before it could ship**: both
+      `CButtonWidget::render()` and `CInputWidget::render()` draw their own
+      background AND then delegate to `CWidget::render()` for their
+      children (same shape Phase 4/6 already established) - an early draft
+      passed the already-self-multiplied `parentOpacity * m_opacity` value
+      into that `CWidget::render()` call, which then multiplies by
+      `m_opacity` AGAIN internally (since `this` is still the same widget
+      instance), fading a Button/Input's children by its own opacity
+      twice. Fixed by passing the ORIGINAL `parentOpacity` through
+      unchanged to the base-class call, letting it do its own single
+      multiply, matching every other container.
+
+      **Z-index**: `int m_zIndex = 0` on `CWidget`, with a new private
+      `paintOrder()` helper (a `std::stable_sort` of `m_children` by
+      `zIndex()`, ascending) that both the default `render()` (paints
+      ascending - lower z first/behind) and the default `hitTest()`
+      (walks that same order in reverse - highest z first, so an
+      overlapping higher sibling wins the hit) now use instead of the raw
+      unsorted child list. Deliberately just a sibling-local reorder, not a
+      full CSS stacking-context system - a low-`zIndex` child of a high-
+      `zIndex` widget still paints "inside" its parent's turn, it can't
+      jump above a sibling of a *different* parent. `stable_sort` means
+      ties (including the default - everyone at 0, unless a spec actually
+      sets `zIndex`) keep plain insertion order, so this is a pure additive
+      extension with zero behavior change for any existing config that
+      never mentions `zIndex`.
+
+      **Visibility toggle**: turned out to be mostly already in place -
+      `CWidget::setVisible()`/`visible()`/`m_visible` existed since Phase 1
+      and `render()`/`hitTest()` already both early-return on it; the
+      `visible` constructor-time spec field was already wired in
+      `buildWidget()`. The missing piece was a RUNTIME mutator (toggling it
+      after construction, "without destroying and recreating its subtree"
+      per this phase's own framing) - added as `set_widget_visible(window,
+      id, visible)` in `LuaBridge.cpp`, generic over any `CWidget` (not
+      type-specific like `set_text`/`set_input_text`), following the exact
+      same "blur first if this happens to be the focused Input" precedent
+      `set_canvas_visible()`/`remove_widget()` already established.
+
+      **Lua surface**: every new base property (`padding`, `margin`,
+      `minW`/`minH`/`maxW`/`maxH`, `opacity`, `zIndex`) is parsed
+      generically in `buildWidget()`'s common tail (after the per-type
+      branch, alongside the existing `visible` handling) rather than
+      per widget type - `padding`/`margin` accept either a single number
+      (uniform) or a table `{top, right, bottom, left}` (CSS shorthand-
+      table convention, matching `color`'s existing number-or-table
+      pattern; an omitted side in the table form is 0, not the uniform
+      default). Each is only actually *applied* (via the corresponding
+      `CWidget` setter) if the Lua spec mentions the field at all - a new
+      `optInsetsField()` helper (mirrors `optFixedField()`, itself reused
+      as-is for opacity/zIndex/min/max since it was already a fully generic
+      "optional numeric field" reader despite its size-specific name)
+      returns `std::nullopt` on a missing field so a widget's own
+      constructor-chosen default (`CInputWidget`'s left padding, in
+      particular) isn't silently zeroed out by a spec that just doesn't
+      mention `padding` - caught during design, before it could ship as a
+      live regression the first time someone used an `Input{}` without
+      explicitly repeating `padding = 8`.
+
+      **`CInputWidget`'s default padding, and why it's now recomputed every
+      frame instead of baked in once**: the label's position used to be a
+      one-time `Vector2D` computed in the constructor. Since Phase 7's
+      `padding` field is applied via `setPadding()` AFTER construction
+      (same as every other post-construction field in `buildWidget()`), a
+      Lua-supplied custom `padding` on an `Input{}` would have silently had
+      no visible effect - the label's position was already baked in before
+      `setPadding()` ever ran. Fixed by giving `CInputWidget` a new
+      `arrangeChildren()` override that repositions the label from
+      `padding().left` and the current `m_size`/label height EVERY
+      `arrange()` pass (matching `CFlexWidget`'s already-established "redo
+      layout every frame, no dirty flag" pattern) instead of once. This
+      also incidentally improved vertical centering accuracy: by
+      `arrange()`-time the whole tree's `measure()` pass has already run
+      (see `Widget.hpp`'s `measure()`-before-`arrange()` two-pass
+      contract), so the label's ACTUAL rasterized height is available -
+      the original constructor-time code had to approximate it via the
+      configured point size instead, since rasterization hadn't happened
+      yet.
+
+      **Debug overlay, added post-Phase-7 in response to live testing**:
+      once padding/margin/etc. were actually being used, the user reported
+      no way to visually confirm they were applied correctly - everything
+      about the box model was invisible unless you already knew the
+      numbers. Brainstormed (three questions, same up-front practice as
+      every design decision this session) and converged on: a per-widget
+      `debug` field (tri-state, cascades to descendants by default),
+      `debugCascade` to wall a subtree off from that inheritance, and
+      `debugShow{...}` to force individual detail categories on/off,
+      layered on top of a "show based on size" automatic default.
+
+      New `CWidget::renderDebug()` (declared in `Widget.hpp`, implemented
+      in the first-ever `Widget.cpp` - previously fully header-only) is a
+      THIRD tree walk, entirely separate from `render()`/`hitTest()`,
+      invoked once per frame from `CCanvas::render()` right after the real
+      `render()` call so debug overlays always paint on top regardless of
+      any widget's own z-index/opacity (diagnostic, not real content - it
+      shouldn't itself be faded/reordered by the thing it's diagnosing).
+      Non-virtual and implemented exactly once, same reasoning as
+      `measure()`/`arrange()`: the box-model information it draws
+      (position/size/padding/margin/id/zIndex/opacity) is entirely made of
+      base `CWidget` fields, no per-subclass knowledge needed - the one
+      exception is a new `virtual bool isInteractive() const` hook
+      (default false; overridden true by `CButtonWidget`/`CInputWidget`)
+      so the hit-target fill only ever draws for widgets that can actually
+      be clicked, never on a purely decorative one even if force-shown via
+      `debugShow.hitTarget = true`.
+
+      New `SDebugSpec{ enabled, showBox, showPadding, showMargin, showId,
+      showSize, showZOpacity, showHitTarget }` (all `std::optional<bool>`)
+      does double duty as both "what a widget's own Lua spec asked for"
+      and "what's been resolved while walking down the tree so far" -
+      merging one into the other is the same "mine wins if set, else keep
+      theirs" operation either way (`resolveDebugSpec()`). `enabled`
+      always resolves to a concrete bool by the time it reaches the root's
+      initial `SDebugSpec{}` (unset = `false`); the `show*` categories can
+      stay unresolved (`nullopt`) all the way to the actual draw call,
+      where that means "decide automatically" rather than "still
+      inheriting" (see below) - two different meanings for the same
+      "unset" state at two different points, made unambiguous by which
+      code path is asking. `debugCascade` (default true, NOT part of
+      `SDebugSpec` itself - a purely local, non-inherited per-widget
+      switch) governs what a widget's children inherit: `true` passes down
+      this widget's own just-resolved `SDebugSpec`; `false` resets to a
+      fresh, all-`nullopt` one - children start over as if nothing above
+      them had ever set `debug` at all, not merely "without this widget's
+      own overrides." Chosen over the narrower "just skip me, keep
+      inheriting from further up" interpretation because it's simpler to
+      implement AND matches the concrete use case that motivated asking
+      for it in the first place (a noisy subtree the user wants left alone
+      entirely, not partially).
+
+      Draws three nested/expanded outline boxes per widget (four thin
+      filled `gfx::drawRect()` strips each - `gfx.hpp` has no stroke
+      primitive, and this is cheap/simple enough not to need one): a
+      margin box (expanded outward from the content box by `margin()`,
+      orange), the content/padding box itself (`boxAt()`, blue), and a
+      padding-inset box (shrunk inward by `padding()`, green, only drawn
+      when padding is actually non-zero). Text labels (id, `WxH`, compact
+      padding/margin values - `"8"` if uniform on all sides, `"T8 R4 B8
+      L4"` otherwise) are rasterized via the same `gfx::makeTextTexture()`
+      every other text in this toolkit uses, but **deliberately NOT
+      cached** the way `CTextNode` caches its own texture - a debug label
+      is rebuilt from scratch every single frame it's shown. Accepted,
+      documented tradeoff rather than an oversight: debug mode is an
+      opt-in, dev-time-only tool nobody ships a real config with turned
+      on, so the re-rasterization cost (real, and exactly what
+      `TextNode.hpp`'s own doc comment warns against doing every frame for
+      *shipped* content) doesn't need paying for with cache-invalidation
+      complexity here. Revisit only if debug mode turns out to get used
+      heavily enough, on large enough trees, for this to actually matter
+      in practice.
+
+      "Auto" sizing gate: labels/insets stay hidden below a `96x16`
+      content-box threshold (too small to render them legibly - widened
+      from an initial `48` after live testing showed labels like `T8 R4
+      B8 L4`/`z:2 op:0.35` still getting clipped at that width) unless
+      explicitly force-shown via `debugShow`, which bypasses the gate
+      entirely. `showZOpacity`'s auto default has a second condition on
+      top of the size gate - `zIndex != 0 || opacity != 1.0` - since an
+      always-default z/opacity isn't interesting to surface uninvited;
+      again, an explicit `debugShow.zOpacity = true` bypasses both gates
+      at once, not just the size one.
+
+      **`debugFontSize` added right after, on request**: `SDebugSpec`
+      gained an `std::optional<int> fontSize` field, inherited/cascaded
+      exactly like `enabled`/`show*` (default 10, same default the
+      overlay always used before this existed). Label Y-offsets (how far
+      above/below its box an id/margin label sits) now scale with the
+      resolved font size instead of a flat `12`, so a larger
+      `debugFontSize` doesn't start overlapping the outline it's labeling.
+- [ ] **Phase 8** - v1 widget catalog completion. Rounds out the widget set
+      needed for a version-1 launch: `Image`, `Divider`, and a simple
+      `Checkbox` (checked/unchecked only - explicitly not an iOS-style
+      toggle switch). `Slider` and `ProgressBar` are deliberately deferred
+      to a fast-follow release *after* v1 ships, not part of launch itself.
+- [ ] **Phase 9** - Widget composability. **Open design question, not yet
+      solved** - flagged here so it doesn't get lost, not because an
+      implementation plan exists yet. Today, building a widget once and
+      storing it in a Lua variable means every reuse of that variable
+      references the *same* instance, not a fresh one per use - there's no
+      component/template concept, just tree-construction calls that return
+      concrete widget objects. Likely direction: wrap widget construction
+      in a plain Lua function that returns a fresh tree per call (similar
+      to a React component or a QML custom type) rather than adding a new
+      first-class "component" primitive to the API surface itself - but
+      this needs real design work before implementation: how props/
+      children get passed in, whether per-call `id` collisions need
+      solving (every widget still needs a stable Lua `id` for the existing
+      free-function-by-id mutation style), and how it interacts with
+      `Bind()`. Blocks nothing else, but worth resolving before Phase 8's
+      new widgets accumulate more copy-pasted construction code in real
+      configs.
+- [ ] **Phase 10** - Interactive widget layer. Sits above Phase 7's base
+      properties and applies only to the subset of widgets that are
+      actually interactive (`Button`, `Input`, and `Checkbox` once Phase 8
+      lands):
+      - **Hover / focus / disabled state as one shared state machine**,
+        reused across every interactive widget type instead of
+        reimplemented per widget - `Input` already has an ad hoc idea of
+        "focused" (Phase 6's `m_focusedInput`); this generalizes and
+        formalizes that instead of letting each new interactive widget
+        invent its own version.
+      - **Cursor icon changes on hover** - resolves the Phase 4 open-
+        question gap (no pointer/hand cursor feedback on hovering a
+        Button today) using the same `mouse.move` hook and hit-testing
+        infra Phase 4 already built, just not yet wired to fire on
+        movement (only press/release are hooked currently).
+      - **Scroll capture that stays inert by default** - no widget reacts
+        to `mouse.axis` at all unless a handler is explicitly hooked in,
+        matching the "swallow only what's opted into" philosophy already
+        established for Phase 6's keybind-priority default.
+- [ ] **Phase 11** - Persistence and native services architecture. Two
+      separate pieces:
+      1. **A persistent-variable wrapper to survive Hyprland config
+         reloads**: an explicit `persistent(key, default)`-style Lua
+         function returning a wrapper table, backed by a native C++ key-
+         value store that survives Lua script re-execution - because the
+         same config file drives both Hyprland and HyprLUI and gets fully
+         rerun on every reload. This is a concrete building block toward
+         the still-open "Config-reload state handling is a mitigation, not
+         a real design" question below - specifically for state a user
+         explicitly wants to *keep* across a reload, as distinct from
+         declaratively-recreated UI that's fine to lose.
+      2. **A native services layer exposing exactly two generic Lua
+         primitives**: run a command, and open a raw socket. Every higher-
+         level integration - D-Bus, JSON parsing, any specific protocol -
+         gets built in pure Lua on top of those two primitives rather than
+         natively in C++, keeping the native surface area deliberately
+         small. A second, separate community repository is also planned to
+         host shareable Lua-built widgets/integrations, kept apart from
+         core on purpose to avoid the maintenance burden seen in projects
+         like Waybar.
+- [ ] **Phase 12** (stretch) - Fade animations via Hyprland's animation
       manager; metatable-based auto-tracking reactivity underneath the
       existing `Bind()` surface.
 
 ## Open questions
 
+- **Widget composability (Phase 9) - unsolved.** Storing a constructed
+  widget in a Lua variable and reusing that variable currently reuses the
+  *same instance*, not a fresh tree per use - no component/template
+  concept exists yet. See Phase 9 above for the likely direction (a plain
+  Lua function returning a fresh tree per call) and what's still
+  undecided (props/children passing, per-call `id` collisions,
+  interaction with `Bind()`).
 - ~~Exact flexbox subset for Phase 1~~ - resolved: `gap`, `padding`
   (uniform, not per-side), `align` (start/center/end only). No
   justify/space-between/wrap - can be added later without changing the
@@ -998,10 +1317,10 @@ piece (raw-keysym limitation).
   the only style anything actually needs so far. Would resurface if a
   future phase needs to *change* a callback after construction (e.g. a
   hypothetical `hyprlui.set_onclick(window, id, fn)`).
-- Padding is uniform-only right now (single number, all four sides) -
-  fine for Phase 1's demo-sized content; per-side padding
-  (`{top=, right=, bottom=, left=}`) is a small, backwards-compatible
-  addition whenever a real layout needs it.
+- ~~Padding is uniform-only right now (single number, all four sides)~~ -
+  resolved by Phase 7: `padding` (and the new `margin`) now accept either a
+  single uniform number or a per-side `{top, right, bottom, left}` table,
+  same shorthand convention `color`'s number-or-table form already had.
 - ~~Should an anchored window's monitor be resolved once at creation, or
   tracked live?~~ - resolved for Phase 2: once, at creation (explicit user
   call) - a HUD you already have open won't jump to a different screen
@@ -1104,6 +1423,43 @@ piece (raw-keysym limitation).
     next one - no new primitive needed, just not automatic.
   - `Button` still isn't keyboard-focusable/activatable (Enter/Space) -
     see the amended note under Phase 4's list above.
+- Phase 7 left a few things deliberately out of v1 scope, all additive:
+  - `padding`/`margin` are only interpreted by `CFlexWidget` (and, for
+    padding, `CInputWidget`'s own label) - `CStackWidget`'s manual/absolute
+    positioning ignores both by design (see Phase 7's own note above).
+    Worth revisiting only if a real use case wants "manual position PLUS
+    automatic inset/spacing" at the same time, which nothing has asked for
+    yet.
+  - Only `Text`'s overflow behavior was actually decided/implemented
+    (truncate-with-ellipsis, via `maxW` forwarded to Hyprland's own Pango
+    text renderer) - wrap and hard-clip modes were never wired up, since a
+    single default was enough once chosen. Adding a selectable `overflow =
+    "wrap"|"truncate"|"clip"` field later wouldn't need `maxW`/`minW`'s own
+    shape to change.
+  - No `set_widget_opacity`/`set_widget_z_index`/etc. runtime mutators -
+    unlike `visible` (which grew `set_widget_visible` this same phase,
+    since "toggle without recreating" was explicitly the ask), opacity/
+    z-index/padding/margin/min-max are currently construction-time-only
+    (set once when the widget is built, no way to change them afterwards
+    short of `remove_widget()` + rebuilding). Additive whenever a real
+    animation/interaction use case needs one - Phase 10's hover/focus/
+    disabled state machine is a likely first real driver for this.
+  - Opacity has no interaction with hit-testing - a fully-transparent
+    (`opacity = 0`) widget is still clickable/focusable, matching how CSS
+    itself treats opacity vs. `pointer-events: none` (two independent
+    concepts). Not treated as a bug; a `pointerEvents`-style opt-out is a
+    separate, additive feature if a real need for "invisible AND
+    unclickable" shows up.
+- **Debug overlay (post-Phase-7) - flagged for a recheck, not yet done**:
+  user reported the auto-show size threshold (`AUTO_MIN_W`/`AUTO_MIN_H`,
+  `Widget.cpp`) was too small in practice - widened once, `48` to `96`
+  (width only; height left at `16`, not reported as a problem yet). Only
+  tuned by eyeball off one report so far, not verified against a real
+  variety of widget sizes/label combinations - revisit this whole area
+  (including whether height also needs widening, and whether a single
+  flat width threshold is even the right model vs. something that scales
+  with the actual label text being measured) next time debug mode gets
+  real use.
 - **Config-reload state handling is a mitigation, not a real design** (see
   the "General plugin-lifecycle bug" note above) - "close absolutely
   everything before every reload" is correct (no more silent orphans) but
