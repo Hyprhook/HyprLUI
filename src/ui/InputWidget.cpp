@@ -29,17 +29,17 @@ namespace HyprLUI {
         addChild(m_label);
     }
 
-    void CInputWidget::render(const Vector2D& origin, float parentOpacity) {
+    void CInputWidget::render(const Vector2D& origin, float parentOpacity, const Vector2D& scale) {
         if (!m_visible)
             return;
 
         CHyprColor faded = effectiveFillColor(m_color);
         faded.a *= composedOpacity(parentOpacity);
-        gfx::drawRect(boxAt(origin), faded, m_rounding);
+        gfx::drawRect(boxAt(origin, scale), faded, m_rounding);
         // See CButtonWidget::render()'s comment - pass parentOpacity, not
         // an already-self-multiplied value, so m_opacity isn't applied to
         // children twice.
-        CWidget::render(origin, parentOpacity); // draws children (the auto label, plus any Lua-added ones) on top
+        CWidget::render(origin, parentOpacity, scale); // draws children (the auto label, plus any Lua-added ones) on top
     }
 
     void CInputWidget::arrangeChildren() {

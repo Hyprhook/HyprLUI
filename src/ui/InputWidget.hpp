@@ -44,7 +44,7 @@ namespace HyprLUI {
         CInputWidget(std::string id, const Vector2D& position, const Vector2D& size, CHyprColor color, int rounding = 0, std::string initialText = "",
                      CHyprColor textColor = CHyprColor{1.0, 1.0, 1.0, 1.0}, int textSize = 14, std::string textFont = "sans");
 
-        void render(const Vector2D& origin, float parentOpacity = 1.0F) override;
+        void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) override;
 
         void setColor(const CHyprColor& color) {
             m_color = color;
@@ -100,10 +100,10 @@ namespace HyprLUI {
         // too (Phase 10) - also makes a disabled Input unfocusable, since
         // click-to-focus goes through this same hit-test (focus_widget()
         // is separately guarded in CUIManager::focusWidget()).
-        CWidget* hitTest(const Vector2D& origin, const Vector2D& point) override {
+        CWidget* hitTest(const Vector2D& origin, const Vector2D& point, const Vector2D& scale = {1, 1}) override {
             if (!m_visible || m_disabled)
                 return nullptr;
-            return boxAt(origin).containsPoint(point) ? this : nullptr;
+            return boxAt(origin, scale).containsPoint(point) ? this : nullptr;
         }
 
         bool isInteractive() const override {

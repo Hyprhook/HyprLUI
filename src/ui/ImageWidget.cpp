@@ -7,16 +7,16 @@ namespace HyprLUI {
         reload();
     }
 
-    void CImageWidget::render(const Vector2D& origin, float parentOpacity) {
+    void CImageWidget::render(const Vector2D& origin, float parentOpacity, const Vector2D& scale) {
         if (!m_visible || !m_texture)
             return;
 
-        // boxAt(origin) - NOT the texture's native size - deliberately
-        // unlike CTextNode::render(): stretching an image to fill an
-        // explicit fixed w/h is the expected/desired behavior here (see
-        // ImageWidget.hpp's doc comment), so the layout box IS the draw
-        // box.
-        gfx::drawTexture(m_texture, boxAt(origin), composedOpacity(parentOpacity), m_rounding);
+        // boxAt(origin, scale) - NOT the texture's native size -
+        // deliberately unlike CTextNode::render(): stretching an image to
+        // fill an explicit fixed w/h is the expected/desired behavior here
+        // (see ImageWidget.hpp's doc comment), so the layout box IS the
+        // draw box.
+        gfx::drawTexture(m_texture, boxAt(origin, scale), composedOpacity(parentOpacity), m_rounding);
     }
 
     void CImageWidget::setImage(const std::string& path) {

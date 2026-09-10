@@ -1433,6 +1433,84 @@ hl.bind("ALT + SHIFT + 7", function()
 	end
 end, { description = "HyprLUI: toggle style test window visibility" })
 
+--------------------------------------------------
+---- HYPRLUI POPIN/GNOME TEST (Phase 17) ----
+--------------------------------------------------
+-- Exercises `style = "popin ..."`/`"gnome"` (DESIGN.md Phase 17) - unlike
+-- `slide` (above), these are scoped to a window's ROOT widget only, and
+-- scale the WHOLE subtree (background box AND the two text lines) as one
+-- rigid unit, not just the root's own box - a Column of two differently-
+-- styled Text children makes that visible (both lines shrink/grow and
+-- reposition together, not independently).
+local HYPRLUI_POPIN_WINDOW = "hyprlui_popin_test"
+local hyprluiPopinWindowOpen = false
+
+local function hyprluiPopinTestWindow(name, style)
+	hl.plugin.hyprlui.window({
+		name = name,
+		x = 900,
+		y = 400,
+		hl.plugin.hyprlui.Stack({
+			id = "root",
+			-- debug = true,
+			animationIn = { speed = 4, bezier = "default", style = style },
+			animationOut = { speed = 4, bezier = "default", style = style },
+			hl.plugin.hyprlui.Box({ id = "bg", w = 1, h = 1, fill = true, color = 0xff332266, rounding = 8 }),
+			hl.plugin.hyprlui.Column({
+				id = "content",
+				x = 12,
+				y = 12,
+				gap = 4,
+				hl.plugin.hyprlui.Text({ id = "title", text = style, size = 16 }),
+				hl.plugin.hyprlui.Text({
+					id = "subtitle",
+					text = "ALT+SHIFT+8 popin, ALT+SHIFT+9 gnome",
+					size = 11,
+					color = { r = 0.8, g = 0.8, b = 0.8, a = 1.0 },
+				}),
+			}),
+		}),
+	})
+end
+
+-- ALT + SHIFT + 8: toggle a `popin 40%` test window.
+hl.bind("ALT + SHIFT + 8", function()
+	if hyprluiPopinWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_POPIN_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiPopinWindowOpen = false
+		return
+	end
+
+	local ok, err = pcall(hyprluiPopinTestWindow, HYPRLUI_POPIN_WINDOW, "popin 40%")
+	if not ok then
+		hyprluiWarn("hyprlui.window", err)
+		return
+	end
+	hyprluiPopinWindowOpen = true
+end, { description = "HyprLUI: toggle the popin test window" })
+
+-- ALT + SHIFT + 9: toggle the same window shape, using `gnome` instead.
+hl.bind("ALT + SHIFT + 9", function()
+	if hyprluiPopinWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_POPIN_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiPopinWindowOpen = false
+		return
+	end
+
+	local ok, err = pcall(hyprluiPopinTestWindow, HYPRLUI_POPIN_WINDOW, "gnome")
+	if not ok then
+		hyprluiWarn("hyprlui.window", err)
+		return
+	end
+	hyprluiPopinWindowOpen = true
+end, { description = "HyprLUI: toggle the gnome test window" })
+
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required
 -- w/h fields, so buildWidget() hits requireFieldNumber() -> luaL_error()

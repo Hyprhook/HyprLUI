@@ -339,30 +339,49 @@
 //     to define a NEW spring itself, only reference one Hyprland (or the
 //     user's config) already registered.
 //
-//     `style` (Phase 16, DESIGN.md) - a position-slide layered on TOP of
-//     the opacity fade above, reusing Hyprland's OWN windowsIn/windowsOut
+//     `style` (Phase 16/17, DESIGN.md) - a position-slide, or a scale
+//     (shrink-and-center / squash-to-a-line), layered on TOP of the
+//     opacity fade above, reusing Hyprland's OWN windowsIn/windowsOut
 //     style string syntax (WindowAnimationController.cpp): "slide" or
 //     "slide left|right|top|bottom" (direction defaults to "left" if
 //     omitted - unlike Hyprland's own "auto-pick the nearest monitor
 //     edge" when no direction is given, which needs monitor geometry a
-//     plain widget doesn't have). Only "slide" is implemented - "popin"/
-//     "gnome" (Hyprland's other two styles) need a genuine scale-through-
-//     render capability this codebase doesn't have yet, and are rejected
-//     at parse time rather than silently accepted-but-inert. Applies to
-//     ANY widget, not just a window's root - same "no distinction between
-//     a widget and its window" principle as everything else here (a
-//     window's root sliding IS the whole window sliding, exactly like its
-//     opacity fading already worked). The slide distance is always this
-//     widget's own current size along the slide axis, and the SAME 0..1
-//     progress already driving the opacity fade also drives the slide -
-//     they are not independently timed; `style` has no effect at all
-//     unless this leaf is otherwise `enabled` (with a real `speed`).
+//     plain widget doesn't have); "popin" or "popin N%" (N is the minimum
+//     size percentage to shrink to before growing to full size, default 0
+//     if omitted); "gnome" or "gnomed" (either spelling). `speed`/`bezier`-
+//     or-`spring` are shared by whichever style is set - they're not
+//     independently timed per style.
+//
+//     `slide` applies to ANY widget, not just a window's root - same "no
+//     distinction between a widget and its window" principle as
+//     everything else here (a window's root sliding IS the whole window
+//     sliding, exactly like its opacity fading already worked). The slide
+//     distance is always this widget's own current size along the slide
+//     axis.
+//
+//     `popin`/`gnome` are scoped to a window's ROOT widget only (Phase 17)
+//     - unlike `slide`, setting either on a non-root widget has no visual
+//     effect at all (only its opacity fade still applies) - this
+//     deliberately mirrors Hyprland itself, which has no sub-window
+//     element popin/gnome concept to generalize in the first place (see
+//     DESIGN.md's Phase 17 entry). `popin` shrinks the whole window
+//     toward its own center (uniformly on both axes) between `N%` of its
+//     final size and 100%; `gnome` squashes it to a horizontal line at
+//     its own vertical center (Y only - width stays full) before growing
+//     back to full height. Either way, EVERYTHING under the root visually
+//     scales together as a rigid unit (children included) - not just the
+//     root's own box.
+//
+//     The SAME 0..1 progress already driving the opacity fade also
+//     drives whichever style is set - they are not independently timed;
+//     `style` has no effect at all unless this leaf is otherwise
+//     `enabled` (with a real `speed`).
 //       hl.plugin.hyprlui.window({
 //         name = "panel", anchor = "top-right",
 //         hl.plugin.hyprlui.Box({
 //           id = "root", w = 240, h = 60, color = 0xff223344,
-//           animationIn = { speed = 3, bezier = "default", style = "slide right" },
-//           animationOut = { speed = 3, bezier = "default", style = "slide right" },
+//           animationIn = { speed = 3, bezier = "default", style = "popin 60%" },
+//           animationOut = { speed = 3, bezier = "default", style = "popin 60%" },
 //         }),
 //       })
 //

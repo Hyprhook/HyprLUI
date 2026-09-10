@@ -23,7 +23,7 @@ namespace HyprLUI {
         m_dirty = false;
     }
 
-    void CTextNode::render(const Vector2D& origin, float parentOpacity) {
+    void CTextNode::render(const Vector2D& origin, float parentOpacity, const Vector2D& scale) {
         if (!m_visible)
             return;
 
@@ -33,18 +33,21 @@ namespace HyprLUI {
         if (!m_texture)
             return;
 
-        // Draw at the TEXTURE's own native size, not boxAt(origin)'s
-        // (possibly min-width-widened) m_size - Hyprland's texture pass
-        // element scales its source to fill whatever box it's given, so
-        // using the layout box here would visibly stretch/blur the glyphs
-        // instead of just reserving empty space beside them (the correct,
-        // standard "min-width doesn't stretch content" behavior every
-        // other toolkit gives text). Harmless double-work when they're
-        // already equal (the common case, and always true when a maxW
-        // constraint - not minW - is what's active, since Pango already
-        // rasterizes to fit that exactly).
-        const float opacity = composedOpacity(parentOpacity);
-        gfx::drawTexture(m_texture, {origin + m_position, m_texture->m_size}, opacity);
+        // Draw at the TEXTURE's own native size (scaled - Phase 17 - by
+        // `scale`, see CWidget::render()'s own doc comment for where that
+        // ever comes from), not boxAt(origin)'s (possibly min-width-
+        // widened) m_size - Hyprland's texture pass element scales its
+        // source to fill whatever box it's given, so using the layout box
+        // here would visibly stretch/blur the glyphs instead of just
+        // reserving empty space beside them (the correct, standard "min-
+        // width doesn't stretch content" behavior every other toolkit
+        // gives text). Harmless double-work when they're already equal
+        // (the common case, and always true when a maxW constraint - not
+        // minW - is what's active, since Pango already rasterizes to fit
+        // that exactly).
+        const float    opacity = composedOpacity(parentOpacity);
+        const Vector2D pos     = origin + (m_position + styleOffset()) * scale;
+        gfx::drawTexture(m_texture, {pos, m_texture->m_size * scale}, opacity);
     }
 
     void CTextNode::setText(const std::string& text) {

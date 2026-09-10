@@ -2493,6 +2493,85 @@ piece (raw-keysym limitation).
       fill-phase's own damage bugs earlier this session, but this needs
       live confirmation (`ALT+SHIFT+6`/`ALT+SHIFT+7`, `hyprlandd.lua`).
 
+- [x] **Phase 17** - `popin`/`gnome` window styles, completing Phase 16's
+      deferred scale-through-render capability. Explicitly requested as
+      its own phase (not folded into Phase 16), since it needed the
+      structural render()-chain change Phase 16 deliberately scoped out.
+    - **Scope: window roots only, matching Hyprland's own actual scope
+      exactly** (confirmed before starting, via AskUserQuestion) - unlike
+      `slide` (Phase 16), which was generalized to any widget. Hyprland
+      itself has no sub-window-element popin/gnome concept to generalize
+      in the first place (a real Hyprland window is one flat texture),
+      so root-only isn't a compromise here, it's the faithful choice.
+      This simplified WHO decides the scale (only `CCanvas`, reading its
+      OWN root's style/progress - see below) - but did NOT eliminate the
+      need to thread scale through the render chain, since visually the
+      WHOLE subtree under a popin/gnome'ing root has to shrink/grow
+      together as a rigid unit (a Stack's background box AND its Text
+      children, say), not just the root's own box.
+    - **`render()`/`boxAt()`/`hitTest()` all gained a `const Vector2D&
+      scale = {1, 1}` parameter** (Widget.hpp, and every leaf override -
+      `CRectNode`/`CTextNode`/`CImageWidget`/`CButtonWidget`/
+      `CInputWidget`/`CCheckboxWidget`) - a per-axis multiplier (`Vector2D`,
+      not a single `float`, since `gnome` needs non-uniform scale: Y only,
+      X stays 1.0) accumulated top-down exactly like `parentOpacity`
+      already is. `CCanvas` is the ONE AND ONLY place that ever passes a
+      non-`{1,1}` value in (its own `render()`, for its own root) - every
+      widget below just passes it straight through unchanged, nothing
+      ever introduces its own new scale independently. `boxAt()` computes
+      `{origin + (m_position + styleOffset()) * scale, m_size * scale}` -
+      confirmed `Vector2D` supports componentwise `operator*(const
+      Vector2D&)` natively (Hyprutils' own `Math.hpp`), no manual
+      per-component multiply needed anywhere.
+    - **`CWidget::styleOffset()` (the generic per-widget mechanism `slide`
+      already used) deliberately does NOT handle popin/gnome** - it
+      returns `{0,0}` for any style not starting with "slide", same as
+      before Phase 17. Two new small `CWidget` accessors instead -
+      `styleString()` (raw `internalStyle` read-back) and
+      `visibilityProgress()` (raw progress read-back) - let `CCanvas`
+      build its OWN popin/gnome offset+scale without `CWidget` needing to
+      know the formulas at all, keeping the "root-only" scope decision
+      structurally enforced (nothing generic could apply it even if a
+      non-root widget set `style = "popin"`).
+    - **Math mirrors Hyprland's own `WindowAnimationController.cpp`
+      exactly** (`applyPopin()`/`applyGnomed()`), re-derived in terms of
+      progress directly rather than Hyprland's own from/to interpolation
+      shape: `popin`'s scale = `minPerc + (1 - minPerc) * progress`
+      (uniform on both axes, `minPerc` from an optional trailing `"N%"`,
+      default 0), offset = `size/2 * (1 - scale)` (keeps the shrunk box
+      centered on the real one); `gnome`'s scale = `{1, progress}` (X
+      untouched), offset = `{0, size.y/2 * (1 - scale.y)}` (squashes to a
+      horizontal line at the real box's own vertical center). Computed in
+      `CCanvas::render()`, cached into `m_popinOffset`/`m_popinScale`
+      (Canvas.hpp) - NOT fed into `fullDamageBox()` though (unlike Phase
+      16's `m_styleOffset`/slide): popin/gnome always shrink WITHIN the
+      real, settled box, centered, so the existing `m_size`-based damage
+      box already safely covers them without any extension - only slide
+      (which moves OUTSIDE the real box) needs one. Cached as members
+      (not purely local to `render()`) specifically so `CCanvas::
+      hitTest()` - called independently of `render()`, from
+      `InputHook.cpp` on pointer move/click - can reuse the same frame's
+      transform: clicking a window mid-popin/gnome now hits its actual,
+      currently-shrunk box, not its full unscaled one (same "click where
+      it visually is" precedent `slide`'s own `boxAt()`-based hit-testing
+      already set in Phase 16).
+    - `optStyleField()` (LuaBridge.cpp) extended to accept `"popin"`/
+      `"popin N%"` (percentage validated via `std::stod`, N unbounded -
+      Hyprland's own `.clamp({5,5}, ...)` floor isn't reproduced, a
+      pathological 0%-or-negative value just means "starts from nothing/
+      inverted" rather than erroring - not guarded against, low-stakes
+      misconfiguration) and `"gnome"`/`"gnomed"` (both spellings, matching
+      Hyprland accepting either).
+    - The debug overlay (`renderDebug()`/`drawDebugOverlay()`, Widget.cpp)
+      does NOT account for `scale` - a debug outline drawn during a
+      popin/gnome animation shows the real, unscaled box/position, not
+      the currently-shrunk one. Deliberate, documented v1 gap: threading
+      scale through that entirely separate diagnostic-only render pass
+      too was judged not worth it for this phase.
+    - Not tested live in a running compositor this session - build/`nm`/
+      lint are clean; needs live confirmation (`ALT+SHIFT+8` popin,
+      `ALT+SHIFT+9` gnome, `hyprlandd.lua`).
+
 ## Open questions
 
 - **Canvas damage tracking trusts `m_root->size()` to bound everything

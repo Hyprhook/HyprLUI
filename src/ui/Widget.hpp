@@ -278,17 +278,26 @@ namespace HyprLUI {
         // pixels; implementations should render at origin + m_position.
         // `parentOpacity` is the already-composed (multiplied-together)
         // opacity of every ancestor - see setOpacity()'s doc comment for
-        // why multiply, not override. Default recurses into children (in
-        // z-index paint order, see paintOrder() below) at their laid-out
-        // positions, passing this widget's own composed opacity down -
+        // why multiply, not override. `scale` (Phase 17, DESIGN.md) is a
+        // per-axis multiplier accumulated from an ancestor `popin`/`gnome`
+        // window style ONLY - CCanvas is the one and only place that ever
+        // passes a non-{1,1} value in (see its own render()), since
+        // popin/gnome are scoped to a window's root, not a generic per-
+        // widget mechanism the way `slide` (styleOffset() below) is. Every
+        // widget below the root just passes it straight through unchanged
+        // - nothing here ever introduces its OWN new scale. Default
+        // recurses into children (in z-index paint order, see
+        // paintOrder() below) at their laid-out positions (scaled), passing
+        // this widget's own composed opacity AND the same scale down -
         // right for containers; leaves override this instead and use the
-        // composed value to fade what they actually draw.
-        virtual void render(const Vector2D& origin, float parentOpacity = 1.0F) {
+        // composed opacity to fade, and boxAt()'s own scale-aware box to
+        // draw, what they actually draw.
+        virtual void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) {
             if (!m_visible)
                 return;
             const float opacity = composedOpacity(parentOpacity);
             for (auto* child : paintOrder())
-                child->render(origin + m_position + styleOffset(), opacity);
+                child->render(origin + (m_position + styleOffset()) * scale, opacity, scale);
         }
 
         void addChild(PWidget child) {
@@ -338,18 +347,18 @@ namespace HyprLUI {
         // structurally" contract, Input's click-to-focus, Checkbox's
         // toggle - this default is only what a plain Box/Text/Image/Row/
         // Column/Stack falls back to.
-        virtual CWidget* hitTest(const Vector2D& origin, const Vector2D& point) {
+        virtual CWidget* hitTest(const Vector2D& origin, const Vector2D& point, const Vector2D& scale = {1, 1}) {
             if (!m_visible)
                 return nullptr;
 
-            const Vector2D absOrigin = origin + m_position + styleOffset();
+            const Vector2D absOrigin = origin + (m_position + styleOffset()) * scale;
             auto           order     = paintOrder();
             for (auto it = order.rbegin(); it != order.rend(); ++it) {
-                if (auto* hit = (*it)->hitTest(absOrigin, point))
+                if (auto* hit = (*it)->hitTest(absOrigin, point, scale))
                     return hit;
             }
 
-            if ((m_onClick || m_onScroll) && !m_disabled && boxAt(origin).containsPoint(point))
+            if ((m_onClick || m_onScroll) && !m_disabled && boxAt(origin, scale).containsPoint(point))
                 return this;
             return nullptr;
         }
@@ -796,10 +805,15 @@ namespace HyprLUI {
         // monitor geometry a plain widget doesn't have (only a window's
         // own canvas does) - "left" is the fixed default here instead,
         // for both widgets and window roots alike, for consistency. Only
-        // "slide" is implemented (popin/gnome are rejected at parse time,
-        // see LuaBridge.cpp's optStyleField()) - the distance slid is
-        // always this widget's own current size along that axis, same
-        // simplification the original CCanvas-only version of this had.
+        // "slide" is handled HERE - "popin"/"gnome" (Phase 17, DESIGN.md)
+        // are valid `style` strings too (see LuaBridge.cpp's
+        // optStyleField()) but are scoped to a window's ROOT only, applied
+        // externally by CCanvas (its own render(), reading styleString()/
+        // visibilityProgress() below), not by this generic per-widget
+        // method - a non-"slide" style simply returns {0,0} here, same as
+        // no style at all. The distance slid is always this widget's own
+        // current size along that axis, same simplification the original
+        // CCanvas-only version of this had.
         Vector2D styleOffset() const {
             if (!m_visibilityAnim)
                 return {0, 0};
@@ -824,8 +838,28 @@ namespace HyprLUI {
             return magnitude * (1.0 - m_visibilityAnim->value());
         }
 
-        CBox boxAt(const Vector2D& origin) const {
-            return {origin + m_position + styleOffset(), m_size};
+        // Phase 17 (DESIGN.md) - raw read-back of this widget's currently-
+        // active visibility animation's `style` string and progress, for
+        // CCanvas to build its own `popin`/`gnome` scale+offset from (see
+        // Canvas.cpp's render()) - deliberately NOT interpreted here the
+        // way styleOffset() interprets "slide", since popin/gnome are
+        // root-only (CCanvas's own concern), not a generic per-widget
+        // capability. "" / 1.0-or-instant-visible-state if there's no
+        // active animation at all (enabled=false, or never animated),
+        // matching styleOffset()'s own "nothing set, do nothing" default.
+        std::string styleString() const {
+            return m_visibilityAnim ? m_visibilityAnim->getStyle() : std::string{};
+        }
+        float visibilityProgress() const {
+            return m_visibilityAnim ? m_visibilityAnim->value() : (m_visible ? 1.0f : 0.0f);
+        }
+
+        // `scale` (Phase 17) - see render()'s own doc comment for what
+        // this is and where it ever comes from (only ever non-{1,1} when
+        // CCanvas is rendering a `popin`/`gnome`-styled window's subtree -
+        // see its own render()).
+        CBox boxAt(const Vector2D& origin, const Vector2D& scale = {1, 1}) const {
+            return {origin + (m_position + styleOffset()) * scale, m_size * scale};
         }
 
         // This widget's own debug-overlay request (see SDebugSpec's doc

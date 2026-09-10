@@ -18,7 +18,7 @@ namespace HyprLUI {
         CTextNode(std::string id, const Vector2D& position, std::string text, int pointSize = 16, CHyprColor color = CHyprColor{1.0, 1.0, 1.0, 1.0},
                   std::string fontFamily = "sans");
 
-        void               render(const Vector2D& origin, float parentOpacity = 1.0F) override;
+        void               render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) override;
 
         void               setText(const std::string& text);
         const std::string& text() const {

@@ -31,7 +31,7 @@ namespace HyprLUI {
       public:
         CImageWidget(std::string id, const Vector2D& position, std::string path, int rounding = 0);
 
-        void render(const Vector2D& origin, float parentOpacity = 1.0F) override;
+        void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) override;
 
         // Re-decodes from a new path (e.g. swapping an icon) immediately,
         // synchronously - not deferred, same reasoning as the constructor

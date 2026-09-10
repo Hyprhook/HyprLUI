@@ -77,20 +77,23 @@ namespace HyprLUI {
         }
 
         // Style slide offset (Phase 16 follow-up, DESIGN.md) - CWidget::
-        // styleOffset() computes this from the ROOT WIDGET's own
-        // visibility animation (its own animationIn/animationOut override
-        // if it has one, else the global hyprlui.animation() config) - no
-        // separate per-canvas mechanism needed, `style` is just another
-        // field on the SAME config shape animationIn/animationOut/
-        // hyprlui.animation() already share (see CWidget::styleOffset()'s
-        // own doc comment, Widget.hpp). Cached here (rather than read
-        // inline where it's used below) so fullDamageBox() - used by the
+        // styleOffset() computes this generically from the ROOT WIDGET's
+        // own visibility animation (its own animationIn/animationOut
+        // override if it has one, else the global hyprlui.animation()
+        // config) - no canvas-specific mechanism needed. Returns {0,0} for
+        // any style other than "slide" (including popin/gnome, handled
+        // entirely separately below, NOT through this field - see the
+        // render() call further down for why). Cached here (rather than
+        // read inline where used below) so fullDamageBox() - used by the
         // redamage tick just below, which also runs while invisible - has
-        // a value ready even before this frame's real m_root->render()
-        // call further down. m_position itself is never touched here or
-        // anywhere else - anchor tracking, hit-testing, and every other
-        // position-consumer keeps using the real, settled position
-        // throughout the whole slide.
+        // a value ready before this frame's real render happens. Never
+        // added to the origin passed to m_root->render() below (that
+        // would double-apply it - root's own boxAt()/render() ALREADY
+        // apply this internally, since slide is a normal per-widget
+        // mechanism as far as CWidget is concerned). m_position itself is
+        // never touched here or anywhere else - anchor tracking, hit-
+        // testing, and every other position-consumer keeps using the
+        // real, settled position throughout the whole slide.
         m_styleOffset = m_root ? m_root->styleOffset() : Vector2D{0, 0};
 
         // Anchor tracking (if any) is re-resolved every frame too - cheap
@@ -131,15 +134,56 @@ namespace HyprLUI {
             damage();
 
         m_root->arrange();
-        // No separate canvas-level opacity OR position multiplier - the
-        // root widget's own composedOpacity()/styleOffset() already fold
-        // in its own animationIn/animationOut progress (see CWidget::
-        // setVisible()), which is all "a window fading/sliding" ever was
-        // under the hood. `m_position` is passed PLAIN here (not + m_styleOffset
-        // - that would double-apply it, since boxAt()/render() internally
-        // add root's OWN styleOffset() already) - parentOpacity is a plain
-        // 1.0, same as any other widget's topmost ancestor.
-        m_root->render(m_position, 1.0F);
+        // No separate canvas-level opacity multiplier - the root widget's
+        // own composedOpacity() already folds in its own animationIn/
+        // animationOut progress (see CWidget::setVisible()), which is all
+        // "a window fading" ever was under the hood - parentOpacity is a
+        // plain 1.0, same as any other widget's topmost ancestor.
+        //
+        // `slide` is handled INTERNALLY by root's own boxAt()/render() (a
+        // normal per-widget mechanism, see CWidget::styleOffset()) - only
+        // `m_position` plain is needed here, adding m_styleOffset too
+        // would double-apply it. `popin`/`gnome` (Phase 17, DESIGN.md)
+        // have NO internal handling at all - root-only, so THEIR
+        // offset+scale is computed right here, the one and only place
+        // either ever gets APPLIED, into m_popinOffset/m_popinScale -
+        // cached as members (not purely local) so hitTest() (Canvas.hpp,
+        // called independently of render() - see its own doc comment) can
+        // reuse this same frame's transform for click detection. NOT read
+        // by fullDamageBox() though: popin/gnome always shrink WITHIN the
+        // real, settled box (centered), so its existing m_size-based box
+        // already safely covers them without any extension, unlike slide
+        // (which moves OUTSIDE the real box and does need one). Math
+        // mirrors Hyprland's own WindowAnimationController.cpp exactly:
+        // popin's minimum-size percentage defaults to 0 if omitted
+        // (`style == "popin"` alone, no trailing "N%"); gnome squashes the
+        // Y axis only (X stays full width) to a horizontal line at the
+        // box's own vertical center.
+        m_popinOffset               = {0, 0};
+        m_popinScale                = {1, 1};
+        const std::string rootStyle = m_root->styleString();
+        if (rootStyle == "gnome" || rootStyle == "gnomed") {
+            const double progress = m_root->visibilityProgress();
+            m_popinScale          = {1.0, progress};
+            m_popinOffset         = {0.0, m_root->size().y * 0.5 * (1.0 - m_popinScale.y)};
+        } else if (rootStyle == "popin" || rootStyle.starts_with("popin ")) {
+            double minPerc = 0.0;
+            if (const auto space = rootStyle.find(' '); space != std::string::npos) {
+                const auto pct = rootStyle.substr(space + 1);
+                try {
+                    minPerc = std::stod(pct.substr(0, pct.size() - 1)) / 100.0; // trailing '%' already validated by LuaBridge.cpp's optStyleField()
+                } catch (...) {}
+            }
+            const double progress = m_root->visibilityProgress();
+            const double s        = minPerc + (1.0 - minPerc) * progress;
+            m_popinScale          = {s, s};
+            m_popinOffset         = m_root->size() * 0.5 * (Vector2D{1.0, 1.0} - m_popinScale);
+        }
+
+        if (m_popinScale != Vector2D{1, 1})
+            m_root->render(m_position + m_popinOffset, 1.0F, m_popinScale);
+        else
+            m_root->render(m_position, 1.0F);
 
         // Debug overlay (box-model outlines/labels) is an entirely
         // separate pass, run AFTER normal content so it always paints on

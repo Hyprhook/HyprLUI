@@ -18,7 +18,7 @@ namespace HyprLUI {
             m_size = size;
         }
 
-        void render(const Vector2D& origin, float parentOpacity = 1.0F) override;
+        void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) override;
 
         void setColor(const CHyprColor& color) {
             m_color = color;

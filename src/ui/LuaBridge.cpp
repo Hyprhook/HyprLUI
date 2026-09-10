@@ -217,29 +217,46 @@ namespace HyprLUI::Lua {
         // Phase 16 follow-up (DESIGN.md): the `style` field shared by
         // hyprlui.animation() and animationIn/animationOut (below) - reuses
         // Hyprland's OWN windowsIn/windowsOut style syntax
-        // (WindowAnimationController.cpp) - "slide" or "slide
-        // left|right|top|bottom" - MINUS its "no direction -> auto-pick
-        // nearest monitor edge" behavior (needs monitor geometry a plain
+        // (WindowAnimationController.cpp): "slide" or "slide
+        // left|right|top|bottom" (MINUS its "no direction -> auto-pick
+        // nearest monitor edge" behavior - needs monitor geometry a plain
         // widget doesn't have; CWidget::styleOffset(), Widget.hpp, always
         // falls back to "left" instead, for both widgets and window roots
-        // alike). Only `slide` is implemented so far - `popin`/`gnome`
-        // (Hyprland's other two styles) need a genuine scale-through-
-        // render capability this codebase doesn't have yet (confirmed via
-        // gfx.hpp/Render.cpp: drawRect()/drawTexture() only take an
-        // absolute CBox, no transform concept at all) - rejected here
-        // rather than silently accepted-but-inert. Returns "" (falsy, "no
-        // style") if the field is absent - matches hyprlui.animation()'s
-        // own "" bezier-or-spring absent-field convention.
+        // alike); "popin" or "popin N%" (N is the minimum size percentage
+        // to shrink to, default 0 if omitted, matching Hyprland's own
+        // default - see Canvas.cpp's render()); "gnome"/"gnomed" (either
+        // spelling, matching Hyprland accepting both). Popin/gnome (Phase
+        // 17, DESIGN.md) are scoped to a window's ROOT widget only, unlike
+        // `slide` which works on any widget - see CCanvas::render()'s own
+        // doc comment for why (they need a genuine scale-through-render
+        // capability that's only implemented at the canvas level, not
+        // CWidget::styleOffset()'s generic per-widget path) - accepted
+        // here regardless of which widget this is, since buildWidget()
+        // has no way to know yet whether IT'S the eventual root; a non-
+        // root widget with `style = "popin"` set just gets no visual
+        // effect (still fades opacity normally), same as any config the
+        // engine doesn't happen to read. Returns "" (falsy, "no style") if
+        // the field is absent - matches hyprlui.animation()'s own ""
+        // bezier-or-spring absent-field convention.
         std::string optStyleField(lua_State* L, int idx, const std::string& errPrefix) {
             const auto style = optFieldString(L, idx, "style", "");
-            if (style.empty() || style == "slide")
+            if (style.empty() || style == "slide" || style == "popin" || style == "gnome" || style == "gnomed")
                 return style;
             if (style.starts_with("slide ")) {
                 const auto dir = style.substr(6);
                 if (dir == "left" || dir == "right" || dir == "top" || dir == "bottom")
                     return style;
             }
-            luaL_error(L, "%s: field 'style' must be \"slide\" or \"slide left|right|top|bottom\", got \"%s\" (popin/gnome aren't implemented yet)", errPrefix.c_str(),
+            if (style.starts_with("popin ")) {
+                const auto pct = style.substr(6);
+                if (!pct.empty() && pct.back() == '%') {
+                    try {
+                        std::stod(pct.substr(0, pct.size() - 1));
+                        return style;
+                    } catch (...) {}
+                }
+            }
+            luaL_error(L, "%s: field 'style' must be \"slide\"/\"slide left|right|top|bottom\", \"popin\"/\"popin N%%\", or \"gnome\"/\"gnomed\", got \"%s\"", errPrefix.c_str(),
                        style.c_str());
             return {}; // unreachable - silences -Wreturn-type
         }

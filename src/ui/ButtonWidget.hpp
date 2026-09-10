@@ -36,7 +36,7 @@ namespace HyprLUI {
             m_size = size;
         }
 
-        void render(const Vector2D& origin, float parentOpacity = 1.0F) override;
+        void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) override;
 
         void setColor(const CHyprColor& color) {
             m_color = color;
@@ -53,10 +53,10 @@ namespace HyprLUI {
         // this widget isn't there for interaction purposes. Unconditional
         // otherwise - matches even with no onClick set, unlike CWidget's
         // generic default (see this file's own doc comment above).
-        CWidget* hitTest(const Vector2D& origin, const Vector2D& point) override {
+        CWidget* hitTest(const Vector2D& origin, const Vector2D& point, const Vector2D& scale = {1, 1}) override {
             if (!m_visible || m_disabled)
                 return nullptr;
-            return boxAt(origin).containsPoint(point) ? this : nullptr;
+            return boxAt(origin, scale).containsPoint(point) ? this : nullptr;
         }
 
         bool isInteractive() const override {

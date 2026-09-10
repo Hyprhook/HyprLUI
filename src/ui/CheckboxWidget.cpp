@@ -5,7 +5,7 @@
 
 namespace HyprLUI {
 
-    void CCheckboxWidget::render(const Vector2D& origin, float parentOpacity) {
+    void CCheckboxWidget::render(const Vector2D& origin, float parentOpacity, const Vector2D& scale) {
         if (!m_visible)
             return;
 
@@ -13,7 +13,7 @@ namespace HyprLUI {
 
         CHyprColor  outer = effectiveFillColor(m_color);
         outer.a *= opacity;
-        gfx::drawRect(boxAt(origin), outer, m_rounding);
+        gfx::drawRect(boxAt(origin, scale), outer, m_rounding);
 
         if (!m_checked)
             return;
@@ -22,7 +22,7 @@ namespace HyprLUI {
         // box's own size, centered) - the "checked" indicator. A plain
         // rect rather than a checkmark glyph, see this class's own doc
         // comment for why.
-        const CBox box = boxAt(origin);
+        const CBox box = boxAt(origin, scale);
         const CBox inner{{box.pos().x + box.size().x * 0.25, box.pos().y + box.size().y * 0.25}, {box.size().x * 0.5, box.size().y * 0.5}};
         CHyprColor checkedFill = m_checkedColor;
         checkedFill.a *= opacity;
