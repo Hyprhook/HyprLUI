@@ -11,6 +11,7 @@
 #include "../reactive/Watcher.hpp"
 #include "../reserved/ReservedAreaComposer.hpp"
 #include "../persistence/PersistenceStore.hpp"
+#include "../services/NativeServices.hpp"
 
 #include <hyprland/src/helpers/Color.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
@@ -1247,6 +1248,33 @@ namespace HyprLUI::Lua {
             return 1;
         }
 
+        // Phase 12 (DESIGN.md) - see NativeServices.hpp for the full
+        // design rationale (why this polls instead of using
+        // CEventLoopManager::doOnReadable(), why no exit code, etc.).
+        // Both of these just parse arguments and delegate - the actual
+        // spawn/socket/poll machinery lives in CNativeServices.
+        int luaRunCmd(lua_State* L) {
+            const std::string cmd = luaL_checkstring(L, 1);
+            if (cmd.empty())
+                return luaL_error(L, "hyprlui.run_cmd: cmd must not be empty");
+            luaL_checktype(L, 2, LUA_TFUNCTION);
+            lua_pushvalue(L, 2);
+            const int fnRef = luaL_ref(L, LUA_REGISTRYINDEX);
+            CNativeServices::get().runCmd(L, cmd, fnRef);
+            return 0;
+        }
+
+        int luaOpenSocket(lua_State* L) {
+            const std::string path = luaL_checkstring(L, 1);
+            if (path.empty())
+                return luaL_error(L, "hyprlui.open_socket: path must not be empty");
+            luaL_checktype(L, 2, LUA_TFUNCTION);
+            lua_pushvalue(L, 2);
+            const int fnRef = luaL_ref(L, LUA_REGISTRYINDEX);
+            CNativeServices::get().openSocket(L, path, fnRef);
+            return 0;
+        }
+
         int luaFocusWidget(lua_State* L) {
             const std::string canvasName = luaL_checkstring(L, 1);
             const std::string id         = luaL_checkstring(L, 2);
@@ -1333,6 +1361,8 @@ namespace HyprLUI::Lua {
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "watch", &luaWatch);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "notify", &luaNotify);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "persistent", &luaPersistent);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "run_cmd", &luaRunCmd);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "open_socket", &luaOpenSocket);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "focus_widget", &luaFocusWidget);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "blur_widget", &luaBlurWidget);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "defineComponent", &luaDefineComponent);
@@ -1366,6 +1396,8 @@ namespace HyprLUI::Lua {
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "watch");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "notify");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "persistent");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "run_cmd");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "open_socket");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "focus_widget");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "blur_widget");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "defineComponent");

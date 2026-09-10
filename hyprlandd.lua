@@ -963,6 +963,67 @@ hl.bind("ALT + SHIFT + S", function()
 	end
 end, { description = "HyprLUI: bump a persistent counter (survives a config reload)" })
 
+--------------------------------------------------
+---- HYPRLUI NATIVE SERVICES TEST (Phase 12) ----
+--------------------------------------------------
+-- Exercises hyprlui.run_cmd()/hyprlui.open_socket() (DESIGN.md Phase 12) -
+-- the two generic native primitives everything else (polling `pactl`,
+-- talking to a PipeWire/D-Bus proxy, etc.) is meant to be built on top of
+-- in pure Lua.
+
+-- ALT + SHIFT + F: run_cmd() a one-shot shell command asynchronously and
+-- show its captured stdout once it finishes.
+hl.bind("ALT + SHIFT + F", function()
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.run_cmd("date", function(output)
+			hl.notification.create({ text = "run_cmd: " .. output, timeout = 3000 })
+		end)
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.run_cmd", err)
+	end
+end, { description = "HyprLUI: run_cmd() a shell command asynchronously" })
+
+-- ALT + SHIFT + D: open_socket() to Hyprland's own event stream
+-- (.socket2.sock) and print whatever the first :read() call returns, then
+-- close it - a status-bar widget could instead keep re-arming :read()
+-- forever to react to workspace/window changes live.
+hl.bind("ALT + SHIFT + D", function()
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+	local his = os.getenv("HYPRLAND_INSTANCE_SIGNATURE")
+	local runtimeDir = os.getenv("XDG_RUNTIME_DIR")
+	if not his or not runtimeDir then
+		hyprluiWarn("hyprlui.open_socket", "HYPRLAND_INSTANCE_SIGNATURE/XDG_RUNTIME_DIR not set")
+		return
+	end
+	local path = runtimeDir .. "/hypr/" .. his .. "/.socket2.sock"
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.open_socket(path, function(sock)
+			if not sock then
+				hl.notification.create({ text = "open_socket: failed to connect", timeout = 3000 })
+				return
+			end
+			sock:read(function(data)
+				if data then
+					hl.notification.create({ text = "socket2 event: " .. data, timeout = 3000 })
+				else
+					hl.notification.create({ text = "socket2: closed", timeout = 3000 })
+				end
+				sock:close()
+			end)
+		end)
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.open_socket", err)
+	end
+end, { description = "HyprLUI: open_socket() Hyprland's own event stream, print one event" })
+
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required
 -- w/h fields, so buildWidget() hits requireFieldNumber() -> luaL_error()

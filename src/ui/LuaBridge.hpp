@@ -474,6 +474,52 @@
 //                             -- last set() otherwise, even across a reload
 //       vol:set(vol:get() + 5)
 //
+// Native services (Phase 12, DESIGN.md): exactly two generic primitives -
+// run a command, and open a raw socket - everything higher-level (polling
+// `pactl`, talking to a PipeWire/D-Bus proxy over its socket, etc.) is
+// meant to be built in pure Lua on top of these, same "small native
+// surface" philosophy as the rest of the API. Both are ephemeral,
+// script-scoped resources (unlike persistent() above) - any still
+// in-flight command/socket is torn down on the next config reload as well
+// as plugin unload.
+//
+//   run_cmd(cmd, callback)
+//     Runs `cmd` via `/bin/sh -c` (same shell-string convention as
+//     hl.exec_cmd), asynchronously, one-shot - no streaming/repeat.
+//     `callback(output)` fires exactly once, with everything the command
+//     printed to stdout, once its stdout closes (the command has
+//     finished, or at least stopped writing). No exit code is available:
+//     Hyprland's own process sets SA_NOCLDWAIT on SIGCHLD globally, so
+//     the kernel reaps every child - including this one - before this
+//     plugin could ever waitpid() it to retrieve a status. On a spawn
+//     failure, `callback("")` still fires (logged as a warning) - the
+//     callback always fires exactly once either way.
+//
+//     Example:
+//       hyprlui.run_cmd("pactl get-sink-volume @DEFAULT_SINK@", function(out)
+//         print(out)
+//       end)
+//
+//   open_socket(path, callback)
+//     Connects a Unix domain socket to `path` (Unix domain only - no TCP/
+//     UDP) and calls `callback(sock)` once connected, or `callback(nil)`
+//     on a connect failure (logged as a warning - a possibly-absent
+//     service isn't a config-authoring mistake, so this doesn't error).
+//     `sock` is a wrapper table:
+//       sock:read(callback)  - calls `callback(data)` once exactly one
+//                               read() call's worth of data is available
+//                               (a plain Lua string - no internal
+//                               draining/batching across multiple reads),
+//                               or `callback(nil)` once the peer closes
+//                               the connection (after which the socket is
+//                               closed and unusable). Only one pending
+//                               :read() at a time - a second call before
+//                               the first resolves replaces it.
+//       sock:write(data)     - a single best-effort write() call, no
+//                               partial-write retry/buffering.
+//       sock:close()         - closes the connection early. Safe to call
+//                               more than once.
+//
 // Window construction and mutation:
 //
 //   window{ name, x = 0, y = 0, w, h, zorder = "overlay"|"background",

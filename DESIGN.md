@@ -1721,7 +1721,7 @@ piece (raw-keysym limitation).
       string like `"123"` satisfies `lua_isnumber()` too), which would
       have silently misclassified a string `default`/`:set()` value as a
       number.
-- [ ] **Phase 12** - Native services layer. Split out from the same
+- [x] **Phase 12** - Native services layer. Split out from the same
       original "Phase 11" as its own phase, for the same reason. Exposes
       exactly two generic Lua primitives: run a command, and open a raw
       socket. Every higher-level integration - D-Bus, JSON parsing, any
@@ -1731,6 +1731,107 @@ piece (raw-keysym limitation).
       also planned to host shareable Lua-built widgets/integrations, kept
       apart from core on purpose to avoid the maintenance burden seen in
       projects like Waybar.
+    - `hyprlui.run_cmd(cmd, callback)` - runs `cmd` via `/bin/sh -c` (same
+      shell-string convention as `hl.exec_cmd`, decided explicitly rather
+      than an argv array), asynchronously, one-shot only - no
+      streaming/repeat (decided explicitly; a caller wanting polling just
+      calls `run_cmd` again from a timer/watcher). `callback(output)`
+      fires exactly once with everything the command printed to stdout,
+      once its stdout closes.
+    - No exit code is reported, discovered rather than assumed: Hyprland's
+      own `main.cpp` (`reapZombieChildrenAutomatically()`) sets
+      `SA_NOCLDWAIT` on `SIGCHLD` globally at startup, so the kernel
+      auto-reaps every child process - including ones this plugin spawns -
+      with no zombie ever appearing and no `waitpid()` ever needed. That's
+      good news for the "don't risk blocking the compositor reaping a
+      child" question this was originally checked for, but it also means
+      a `waitpid()` call to retrieve the child's exit status would
+      unconditionally fail with `ECHILD` (the kernel already reaped it) -
+      there is no way to obtain an exit code at all under this global
+      setting, so `run_cmd`'s callback doesn't try to offer one. On a
+      spawn/pipe failure, `callback("")` still fires (logged as a
+      `Log::WARN`, not a `luaL_error` - an environmental failure, not a
+      config-authoring mistake) - the callback is guaranteed to fire
+      exactly once either way, with nothing else to check.
+    - `hyprlui.open_socket(path, callback)` - connects a Unix domain
+      socket to `path` (Unix domain only, decided explicitly - no TCP/UDP,
+      not needed for any realistic desktop-integration target: PipeWire,
+      most D-Bus session buses, Hyprland's own IPC sockets, etc. are all
+      Unix domain). `callback(sock)` fires once connected, or
+      `callback(nil)` on a connect failure (logged as a warning; unlike
+      `run_cmd`, "did this even connect" is a load-bearing distinction a
+      caller must be able to check, so this can't just paper over it with
+      an empty placeholder the way `run_cmd` does). `connect()` itself is
+      a blocking call here, deliberately - for a *local* Unix domain
+      socket (no DNS, no network round-trip) this is realistically
+      instant, unlike a network `connect()` (which Phase 12 already
+      excludes). All ongoing read/write after that point is non-blocking.
+    - `sock:read(callback)` - fires `callback(data)` with exactly one
+      `read()` call's worth of data (decided explicitly - no internal
+      draining/batching across multiple reads, matching the "expose the
+      raw primitive" stance elsewhere in this API), or `callback(nil)`
+      once the peer closes the connection (after which the socket is torn
+      down; a stray `:read()` after that point still fires `callback(nil)`
+      immediately rather than erroring - a benign, non-config-authoring
+      race, not something worth crashing a script over). Only one pending
+      `:read()` at a time per socket - a second call before the first
+      resolves replaces it (releases the old callback ref), matching
+      "last call wins" rather than an internal queue.
+    - `sock:write(data)` - a single best-effort `write()` call, no
+      partial-write retry/buffering. `sock:close()` - closes the
+      connection early; safe to call more than once.
+    - Async I/O model - **a real correctness finding, not a style choice**:
+      the obvious primitive for "call me when this fd is readable" is
+      `CEventLoopManager::doOnReadable()` (already the established
+      internal-API-reliance pattern, see Watcher.hpp/.cpp), but reading
+      its Wayland-side handler (`handleWaiterFD()` in
+      `EventLoopManager.cpp`) before using it turned up a real gap: the
+      handler checks `mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)` FIRST,
+      and if either is set, drops the waiter via `onFdReadableFail()`
+      WITHOUT ever invoking the registered callback at all. On Linux, a
+      pipe or a stream socket whose peer has closed commonly reports
+      `HANGUP` together with `READABLE` in the exact same readiness
+      notification (the "there's trailing data AND the writer is already
+      gone" case) - meaning `doOnReadable`'s callback can simply never
+      fire for the exact moment a command finishes or a peer disconnects,
+      which is the single most important moment for both of this phase's
+      primitives. Rather than build on an internal API with a confirmed
+      gap for precisely the case this code needs, both `run_cmd` and
+      `sock:read()` instead poll on a short repeating `CEventLoopTimer`
+      (the same primitive Watcher.cpp already uses for interval-based
+      watchers, at a 16ms interval) and drive reads via a plain
+      non-blocking `read()` - `EAGAIN` means keep polling, `0` means EOF,
+      a positive count is data, any other `errno` is a real error. Trades
+      a small amount of latency (at most one poll interval) for actually
+      being correct on the close/EOF case.
+    - Also discovered while implementing this:
+      `Hyprutils::OS::CFileDescriptor::getFlags()`/`setFlags()` are
+      `F_GETFD`/`F_SETFD` (the close-on-exec fd flag) - **not**
+      `F_GETFL`/`F_SETFL` (the file status flags `O_NONBLOCK` actually
+      lives under). Setting a pipe/socket fd non-blocking goes through a
+      raw `fcntl()` call directly, not through `CFileDescriptor`'s own
+      flag methods, which would silently do the wrong thing here.
+    - Lifecycle: unlike Phase 11's `CPersistenceStore` (which deliberately
+      does NOT clear on a config reload), `CNativeServices::clear()` IS
+      wired into `resetAllState()` (`config.preReload`) as well as
+      `PLUGIN_EXIT` - these are ephemeral, script-scoped resources, the
+      opposite lifecycle from persistence. `clear()` cancels every
+      in-flight poll timer, releases every Lua callback ref, best-effort
+      `SIGTERM`s any still-running command's process (again, no `waitpid`
+      needed or possible - see above), and closes every open socket fd.
+    - Both running commands and open sockets are stored keyed by a stable
+      integer id in an `unordered_map`, looked up fresh by id on every
+      timer tick, rather than a raw pointer captured directly into the
+      timer's closure. Reason: a cancelled `CEventLoopTimer` may still be
+      referenced by `CEventLoopManager`'s own internal timer list for a
+      little while after `cancel()` returns (shared ownership via `SP<>`),
+      so a closure that captured a raw pointer into a command/socket
+      struct already destroyed by `clear()` in the meantime would be a
+      dangling-pointer call if the manager ever invoked it again before
+      actually purging it. An id lookup that just returns early on a miss
+      is the same defense Watcher.cpp's own timers already use (by
+      watcher name, not a pointer) - this project's established pattern
+      for the same hazard, not a new one invented here.
 - [ ] **Phase 13** (stretch) - Fade animations via Hyprland's animation
       manager; metatable-based auto-tracking reactivity underneath the
       existing `Bind()` surface. Kept last on purpose - animation polish

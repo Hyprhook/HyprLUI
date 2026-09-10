@@ -21,6 +21,7 @@
 #include "reserved/ReservedAreaComposer.hpp"
 #include "ui/ComponentRegistry.hpp"
 #include "persistence/PersistenceStore.hpp"
+#include "services/NativeServices.hpp"
 
 // Do NOT change this function.
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
@@ -104,6 +105,13 @@ namespace {
         // script's re-registration would immediately hit "already
         // registered" against the stale entry from before the reload.
         HyprLUI::CComponentRegistry::get().clear();
+        // Phase 12: run_cmd()/open_socket() are ephemeral, script-scoped
+        // resources - the OPPOSITE lifecycle from CPersistenceStore (see
+        // that class's own header comment) - so unlike it, this DOES
+        // belong in resetAllState(): a reload gets a fresh script, and
+        // any command/socket the old one was waiting on is meaningless
+        // to keep around.
+        HyprLUI::CNativeServices::get().clear();
     }
 
 } // namespace

@@ -66,6 +66,28 @@
 ---@field get fun(self: HyprLUI.PersistentStore<T>): T
 ---@field set fun(self: HyprLUI.PersistentStore<T>, value: T): nil
 
+-- Phase 12 (DESIGN.md) native-services types. run_cmd()'s callback always
+-- gets a string (empty on a spawn/pipe failure - see LuaBridge.hpp for
+-- why this can't distinguish "" from a genuine failure any other way,
+-- given no exit code is available). open_socket()'s callback gets `nil`
+-- on a connect failure instead - unlike run_cmd, "did this even connect"
+-- is a load-bearing distinction a caller must be able to check.
+---@alias HyprLUI.RunCmdCallback fun(output: string): nil
+---@alias HyprLUI.SocketReadCallback fun(data: string?): nil
+---@alias HyprLUI.OpenSocketCallback fun(sock: HyprLUI.Socket?): nil
+
+-- Returned by hyprlui.open_socket()'s callback on a successful connect.
+-- :read()'s callback fires with exactly one read() call's worth of data
+-- (never internally drained/batched across multiple reads), or `nil` once
+-- the peer closes the connection (after which the socket is closed and
+-- unusable - a stray :read() on it after that point still fires its
+-- callback with `nil` rather than erroring). Only one pending :read() at
+-- a time - a second call before the first resolves replaces it.
+---@class HyprLUI.Socket
+---@field read fun(self: HyprLUI.Socket, callback: HyprLUI.SocketReadCallback): nil
+---@field write fun(self: HyprLUI.Socket, data: string): nil
+---@field close fun(self: HyprLUI.Socket): nil
+
 -- Either a single number (applied to all four sides) or a table with any
 -- subset of sides given (an omitted side defaults to 0, NOT to whatever
 -- the uniform-number form would have used) - same convention `color`
@@ -346,6 +368,8 @@
 ---@field Bind fun(name: string): HyprLUI.BindMarker
 ---@field focus_widget fun(window: string, id: string): nil
 ---@field blur_widget fun(): nil
+---@field run_cmd fun(cmd: string, callback: HyprLUI.RunCmdCallback): nil
+---@field open_socket fun(path: string, callback: HyprLUI.OpenSocketCallback): nil
 
 ---@type HyprLUI.API
 ---@diagnostic disable-next-line: missing-fields
