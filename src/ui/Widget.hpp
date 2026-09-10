@@ -14,6 +14,8 @@
 
 #include <hyprland/src/helpers/math/Math.hpp>
 #include <hyprland/src/helpers/Color.hpp>
+#include <hyprland/src/helpers/AnimatedVariable.hpp>
+#include <hyprland/src/animation/AnimationManager.hpp>
 
 #include <algorithm>
 #include <functional>
@@ -23,6 +25,157 @@
 #include <vector>
 
 namespace HyprLUI {
+
+    // Phase 13 (DESIGN.md): shared duration/bezier config for widget
+    // visibility fades (hyprlui.animation({leaf="in"|"out", ...}), see
+    // LuaBridge.cpp's luaAnimation()) - mirrors Hyprland's own
+    // windowsIn/windowsOut split, but is NOT hooked into Hyprland's real
+    // animation tree: verified (Config::AnimationTree.hpp) that
+    // CAnimationTreeController exposes no way to register a new leaf node
+    // from outside - `reset()` hardcodes the fixed tree once at startup,
+    // and hl.animation() itself errors on any name that isn't already one
+    // of those. So this is a small self-contained config store instead,
+    // reusing only what IS generically shared process-wide: the bezier-
+    // curve registry (Animation::mgr()->bezierExists()/getBezier(), a flat
+    // name->curve map, unrelated to the tree) and the animated-variable
+    // ticking machinery itself (confirmed by reading
+    // CHyprAnimationManager::tick()/handleUpdate(): a CGenericAnimatedVariable
+    // whose SAnimationContext has no window/workspace/layer set still gets
+    // ticked/interpolated correctly - it just skips Hyprland's own
+    // per-owner damage tracking, which HyprLUI doesn't want anyway, since
+    // it damages its own canvases itself, same as Watcher.cpp's notify()).
+    //
+    // Each slot's SAnimationPropertyConfig is created ONCE (in the
+    // constructor) and mutated in place on every later configure() call,
+    // never replaced - widgets' CAnimatedVariables hold only a WEAK
+    // reference to it (CBaseAnimatedVariable::setConfig()), which would
+    // dangle if this were ever swapped for a new object instead of edited
+    // in place. Matches how Hyprland's own
+    // CAnimationConfigTree::setConfigForNode() behaves (mutates, never
+    // replaces) - confirmed by reading CBaseAnimatedVariable's own
+    // getPercent()/enabled()/getBezierName(), which all dereference
+    // m_pConfig->pValues->X fresh on every call, never caching.
+    class CWidgetAnimations {
+      public:
+        enum EKind {
+            IN,
+            OUT
+        };
+
+        static CWidgetAnimations& get() {
+            static CWidgetAnimations instance;
+            return instance;
+        }
+
+        // hyprlui.animation({leaf="in"|"out", enabled, speed, bezier}) -
+        // `speed` is in DECISECONDS (tenths of a second), matching
+        // Hyprland's own hl.animation()'s unit exactly, so a user's
+        // existing mental model transfers directly. Disabled (the
+        // default, until configure() is ever called) means
+        // setVisible() stays exactly as instant as it always was - this
+        // is purely opt-in, no existing behavior changes unless a config
+        // author explicitly turns it on.
+        void configure(EKind kind, bool enabled, float speedDeciseconds, const std::string& bezier) {
+            auto& cfg            = slot(kind);
+            cfg->internalEnabled = enabled ? 1 : 0;
+            cfg->internalSpeed   = speedDeciseconds;
+            cfg->internalBezier  = bezier;
+        }
+
+        bool enabled(EKind kind) const {
+            return slot(kind)->internalEnabled != 0;
+        }
+
+        // The shared config object for `kind` - widgets pass this
+        // straight to Animation::mgr()->createAnimation()/setConfig().
+        SP<Hyprutils::Animation::SAnimationPropertyConfig> config(EKind kind) const {
+            return slot(kind);
+        }
+
+      private:
+        CWidgetAnimations() {
+            for (auto* cfg : {&m_in, &m_out}) {
+                *cfg                    = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
+                (*cfg)->internalEnabled = 0;
+                (*cfg)->internalSpeed   = 3.f;
+                (*cfg)->internalBezier  = "default";
+                (*cfg)->pValues         = *cfg; // self-referencing root node, see class comment
+            }
+        }
+
+        SP<Hyprutils::Animation::SAnimationPropertyConfig>& slot(EKind kind) {
+            return kind == IN ? m_in : m_out;
+        }
+        const SP<Hyprutils::Animation::SAnimationPropertyConfig>& slot(EKind kind) const {
+            return kind == IN ? m_in : m_out;
+        }
+
+        SP<Hyprutils::Animation::SAnimationPropertyConfig> m_in, m_out;
+    };
+
+    // Builds a standalone SAnimationPropertyConfig (self-referencing
+    // pValues, same shape as CWidgetAnimations' own slots above) - used
+    // for a per-widget animationIn/animationOut override (see CWidget::
+    // setAnimationInOverride()/setAnimationOutOverride() below), which
+    // unlike the global slots is built ONCE at construction time from a
+    // Lua table and never mutated in place afterward - there's no live-
+    // reconfigure API for one specific widget's own override the way
+    // hyprlui.animation() live-reconfigures the global one.
+    inline SP<Hyprutils::Animation::SAnimationPropertyConfig> makeAnimationConfig(bool enabled, float speedDeciseconds, const std::string& bezier) {
+        auto cfg             = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
+        cfg->internalEnabled = enabled ? 1 : 0;
+        cfg->internalSpeed   = speedDeciseconds;
+        cfg->internalBezier  = bezier;
+        cfg->pValues         = cfg;
+        return cfg;
+    }
+
+    // Shared implementation for CWidget::setVisible()/CCanvas::setVisible()
+    // - both are unrelated classes that need exactly this logic (a widget
+    // and a whole canvas fade the same way), so this is a free function
+    // operating on the caller's own `outVisible`/`anim` members by
+    // reference rather than duplicating it twice. `enabled`/`config` are
+    // already RESOLVED by the caller (CWidget layers its own optional
+    // per-widget fadeIn/fadeOut override on top of CWidgetAnimations'
+    // global one before calling this; CCanvas has no override concept and
+    // just passes the global one straight through) - this function itself
+    // doesn't know or care where they came from. Instant (the pre-
+    // Phase-13 behavior) if `enabled` is false; otherwise lazily creates
+    // `anim` the first time it's actually needed and animates it toward
+    // 1.0 (showing, `outVisible` flips true immediately so the caller
+    // keeps participating in layout/hit-testing/rendering from frame 1)
+    // or 0.0 (hiding, `outVisible` only flips false once `onHideFinished`
+    // actually runs). `onHideFinished`'s own goal re-check guards against
+    // a show() reversing the fade mid-flight: if a later call already
+    // reassigned the goal back to 1.0 by the time this fires, it's a
+    // no-op instead of incorrectly re-hiding something that just finished
+    // fading back in.
+    inline void applyAnimatedVisibility(bool visible, bool enabled, const SP<Hyprutils::Animation::SAnimationPropertyConfig>& config, bool& outVisible, PHLANIMVAR<float>& anim,
+                                        std::function<void()> onHideFinished) {
+        if (!enabled) {
+            outVisible = visible;
+            anim.reset();
+            return;
+        }
+
+        if (!anim)
+            Animation::mgr()->createAnimation(outVisible ? 1.0f : 0.0f, anim, config, AVARDAMAGE_NONE);
+        else
+            anim->setConfig(config);
+
+        if (visible) {
+            outVisible = true;
+            *anim      = 1.0f;
+        } else {
+            *anim = 0.0f;
+            auto* rawAnim =
+                anim.get(); // the goal re-check below needs to read it AFTER this call returns, once the callback actually fires later - `anim` itself (the caller's member) stays alive at least that long, so a raw pointer into it is safe
+            anim->setCallbackOnEnd([rawAnim, onHideFinished](WP<Hyprutils::Animation::CBaseAnimatedVariable>) {
+                if (rawAnim->goal() == 0.0f)
+                    onHideFinished();
+            });
+        }
+    }
 
     // Per-side box-model insets shared by `padding` (inset a container's
     // children from its own edges) and `margin` (a widget's own requested
@@ -121,7 +274,7 @@ namespace HyprLUI {
         virtual void render(const Vector2D& origin, float parentOpacity = 1.0F) {
             if (!m_visible)
                 return;
-            const float opacity = parentOpacity * static_cast<float>(m_opacity);
+            const float opacity = composedOpacity(parentOpacity);
             for (auto* child : paintOrder())
                 child->render(origin + m_position, opacity);
         }
@@ -344,11 +497,124 @@ namespace HyprLUI {
             return m_id;
         }
 
+        // Per-widget override of the global hyprlui.animation({leaf=
+        // "in"|"out", ...}) config, set once at construction from this
+        // widget's own `animationIn`/`animationOut` table field (see
+        // LuaBridge.cpp's buildWidget()) - nullptr (the default) means
+        // "use the global config for this leaf, whatever it currently
+        // is." A non-null override completely REPLACES the global one for
+        // this widget (including its own enabled/disabled state - e.g. a
+        // widget can force `animationOut = { enabled = false }` to opt
+        // itself OUT of a globally-enabled animation), it does not merge
+        // with it. Only affects setVisible()/animateOutThenRemove() below,
+        // not the global config itself or any other widget. Deliberately
+        // NOT named "fade" anywhere in this API - opacity is the only
+        // thing actually animated today, but the leaf/override mechanism
+        // itself is generic (any future animatable property would reuse
+        // the same "in"/"out" config shape), so nothing here should imply
+        // it's opacity-only.
+        void setAnimationInOverride(SP<Hyprutils::Animation::SAnimationPropertyConfig> config) {
+            m_animationInOverride = std::move(config);
+        }
+        void setAnimationOutOverride(SP<Hyprutils::Animation::SAnimationPropertyConfig> config) {
+            m_animationOutOverride = std::move(config);
+        }
+
+        // Instant by default, exactly as before Phase 13 - only animates
+        // if the relevant leaf (`IN` when becoming visible, `OUT` when
+        // becoming hidden) resolves enabled - this widget's own override
+        // (see setAnimationInOverride()/setAnimationOutOverride() above)
+        // if it has one, else the global hyprlui.animation() config - so
+        // this is purely opt-in. Used identically regardless of WHY
+        // visibility is changing - an explicit hyprlui.set_widget_visible()
+        // call, or this widget being a window's root widget and the whole
+        // window opening/closing (see CCanvas::setVisible(), which just
+        // delegates to its root's own setVisible()) - there is no separate
+        // "creation" or "toggle" animation concept, just becoming visible
+        // or becoming hidden. When animating a hide, `m_visible` itself
+        // doesn't flip to false until the animation actually finishes (via
+        // the end callback below) - the widget keeps rendering/laying out
+        // at its fading-down opacity until then. When animating a show,
+        // `m_visible` flips true immediately (same as the instant path)
+        // so it participates in layout/hit-testing from frame 1, and only
+        // its opacity ramps up.
         void setVisible(bool visible) {
-            m_visible = visible;
+            const auto& widgetCfg = visible ? m_animationInOverride : m_animationOutOverride;
+            if (widgetCfg) {
+                applyAnimatedVisibility(visible, widgetCfg->internalEnabled != 0, widgetCfg, m_visible, m_visibilityAnim, [this]() { m_visible = false; });
+                return;
+            }
+            auto&      anims = CWidgetAnimations::get();
+            const auto kind  = visible ? CWidgetAnimations::IN : CWidgetAnimations::OUT;
+            applyAnimatedVisibility(visible, anims.enabled(kind), anims.config(kind), m_visible, m_visibilityAnim, [this]() { m_visible = false; });
         }
         bool visible() const {
             return m_visible;
+        }
+
+        // Forces this widget fully hidden with NO animation and no
+        // end-callback - used ONLY by hyprlui.window()'s creation path
+        // (LuaBridge.cpp) to seed a brand-new root widget into a "just
+        // built, about to animate in" state before immediately calling
+        // setVisible(true) on it, so that call has something to actually
+        // animate FROM. A plain setVisible(false) there would be wrong
+        // whenever this widget's "out" also happens to be enabled (it
+        // would itself animate 1->0 instead of snapping instantly,
+        // breaking the very assumption the following setVisible(true)
+        // relies on). Not for general use - an ordinary hide should always
+        // go through setVisible(false) instead, so its own end-callback
+        // semantics apply.
+        void primeHidden() {
+            m_visible = false;
+            m_visibilityAnim.reset();
+        }
+
+        // Like setVisible(false), but the caller intends to actually
+        // ERASE this widget afterward (hyprlui.remove_widget(), or a
+        // whole window closing via CUIManager::removeCanvas() delegating
+        // to its root - not just hide it) - `onDone` fires once that's
+        // safe: immediately if "out" isn't enabled (this widget's own
+        // override if it has one, else the global config), or once the
+        // animation finishes otherwise. This widget doesn't know its own
+        // parent, so it can't call removeChild() on itself - the caller
+        // (LuaBridge.cpp) does the actual erase from `onDone`. No
+        // reversal-guard needed here (unlike applyAnimatedVisibility's
+        // hide path) - nothing ever calls setVisible(true) on a widget
+        // that's about to be removed.
+        void animateOutThenRemove(std::function<void()> onDone) {
+            const auto& config  = m_animationOutOverride ? m_animationOutOverride : CWidgetAnimations::get().config(CWidgetAnimations::OUT);
+            const bool  enabled = m_animationOutOverride ? m_animationOutOverride->internalEnabled != 0 : CWidgetAnimations::get().enabled(CWidgetAnimations::OUT);
+
+            if (!enabled) {
+                onDone();
+                return;
+            }
+
+            if (!m_visibilityAnim)
+                Animation::mgr()->createAnimation(m_visible ? 1.0f : 0.0f, m_visibilityAnim, config, AVARDAMAGE_NONE);
+            else
+                m_visibilityAnim->setConfig(config);
+
+            *m_visibilityAnim = 0.0f;
+            m_visibilityAnim->setCallbackOnEnd([onDone](WP<Hyprutils::Animation::CBaseAnimatedVariable>) { onDone(); });
+        }
+
+        // Whether this widget's own visibility fade, or any descendant's,
+        // is actively interpolating right now - used by CCanvas::render()
+        // to know whether to keep damaging every frame while a fade is in
+        // flight. A fade changes rendered opacity every frame for its
+        // whole duration, unlike every other mutation in this codebase
+        // (which changes state once and is done) - see CCanvas::damage()'s
+        // doc comment for why even a single one-shot mutation needs
+        // several frames of damage, let alone a multi-second continuous
+        // one.
+        bool isAnimating() const {
+            if (m_visibilityAnim && m_visibilityAnim->isBeingAnimated())
+                return true;
+            for (auto& child : m_children)
+                if (child->isAnimating())
+                    return true;
+            return false;
         }
 
         void setPosition(const Vector2D& position) {
@@ -422,6 +688,22 @@ namespace HyprLUI {
             return m_opacity;
         }
 
+        // Combines `parentOpacity` with this widget's own `m_opacity` AND
+        // (Phase 13) any in-flight visibility-fade progress from
+        // setVisible() - every render() override (this default container
+        // implementation and each leaf widget's own) multiplies through
+        // this rather than inlining `parentOpacity * m_opacity` directly,
+        // so the fade applies uniformly without each leaf needing its own
+        // awareness of m_visibilityAnim. A widget that's never been
+        // animated (m_visibilityAnim still null) computes identically to
+        // before Phase 13 - zero behavior change unless actually used.
+        float composedOpacity(float parentOpacity) const {
+            float o = parentOpacity * static_cast<float>(m_opacity);
+            if (m_visibilityAnim)
+                o *= m_visibilityAnim->value();
+            return o;
+        }
+
         // Paint-order override among this widget's OWN siblings (i.e.
         // within its parent's child list) - higher paints later/on top.
         // Ties (including the default, everyone at 0) keep insertion
@@ -482,7 +764,20 @@ namespace HyprLUI {
         // information it draws (position/size/padding/margin/id/zIndex/
         // opacity) is entirely made of base CWidget fields, no per-
         // subclass knowledge needed.
-        void renderDebug(const Vector2D& origin, const SDebugSpec& inherited);
+        //
+        // Returns the union of every pixel actually drawn anywhere in
+        // this subtree's overlay (nullopt if nothing anywhere has debug
+        // enabled) - several of drawDebugOverlay()'s own labels (id,
+        // margin, size, z/opacity) are DELIBERATELY drawn just outside a
+        // widget's own box, so CCanvas needs this back to know how far
+        // beyond its normal content box it has to damage - see
+        // CCanvas::fullDamageBox()'s doc comment for the ghosting bug
+        // this fixes (content box alone under-damages this overlay,
+        // which self-heals for ordinary discrete mutations, since the
+        // overflowing pixels just don't change between them, but visibly
+        // ghosts the instant something DOES keep changing there every
+        // frame - a Phase 13 fade being the most common case).
+        std::optional<CBox> renderDebug(const Vector2D& origin, const SDebugSpec& inherited);
 
       protected:
         // Sets m_size from this widget's own content/children. Default:
@@ -496,26 +791,29 @@ namespace HyprLUI {
         // widget's own m_size. Default: no-op - right for leaves and for
         // CStackWidget, whose children keep whatever absolute position
         // they were given. Flex containers override this.
-        virtual void                                     arrangeChildren() {}
+        virtual void                                       arrangeChildren() {}
 
-        std::string                                      m_id;
-        Vector2D                                         m_position;
-        Vector2D                                         m_size;
-        bool                                             m_visible = true;
-        std::optional<double>                            m_fixedW, m_fixedH;
-        std::optional<double>                            m_minW, m_minH, m_maxW, m_maxH;
-        SEdgeInsets                                      m_padding, m_margin;
-        double                                           m_opacity = 1.0;
-        int                                              m_zIndex  = 0;
-        SDebugSpec                                       m_debugSpec;
-        bool                                             m_debugCascade = true;
-        bool                                             m_disabled     = false;
-        bool                                             m_hovered      = false;
-        std::optional<CHyprColor>                        m_hoverColor, m_disabledColor;
-        std::function<void()>                            m_onHoverStart, m_onHoverEnd;
-        std::function<void(double delta, bool vertical)> m_onScroll;
-        std::function<void()>                            m_onClick;
-        std::vector<PWidget>                             m_children;
+        std::string                                        m_id;
+        Vector2D                                           m_position;
+        Vector2D                                           m_size;
+        bool                                               m_visible = true;
+        std::optional<double>                              m_fixedW, m_fixedH;
+        std::optional<double>                              m_minW, m_minH, m_maxW, m_maxH;
+        SEdgeInsets                                        m_padding, m_margin;
+        double                                             m_opacity = 1.0;
+        int                                                m_zIndex  = 0;
+        SDebugSpec                                         m_debugSpec;
+        bool                                               m_debugCascade = true;
+        bool                                               m_disabled     = false;
+        bool                                               m_hovered      = false;
+        std::optional<CHyprColor>                          m_hoverColor, m_disabledColor;
+        std::function<void()>                              m_onHoverStart, m_onHoverEnd;
+        std::function<void(double delta, bool vertical)>   m_onScroll;
+        std::function<void()>                              m_onClick;
+        std::vector<PWidget>                               m_children;
+        PHLANIMVAR<float>                                  m_visibilityAnim; // Phase 13 - lazily created only once setVisible() actually animates, see CWidgetAnimations
+        SP<Hyprutils::Animation::SAnimationPropertyConfig> m_animationInOverride,
+            m_animationOutOverride; // Phase 13 follow-up - per-widget animationIn/animationOut override, null = use the global config
 
       private:
         // Merges m_debugSpec into `inherited` ("mine wins per-field if
@@ -530,8 +828,11 @@ namespace HyprLUI {
         // (nullopt) categories are decided here, from this widget's own
         // size (and, for z/opacity, whether it's at a non-default value).
         // `origin` is this widget's PARENT's already-accumulated absolute
-        // position, same convention as render()/hitTest(). See Widget.cpp.
-        void drawDebugOverlay(const Vector2D& origin, const SDebugSpec& resolved) const;
+        // position, same convention as render()/hitTest(). Returns the
+        // union of every pixel actually drawn (at least this widget's own
+        // box, even if nothing else ended up drawn) - see renderDebug()'s
+        // own doc comment for why. See Widget.cpp.
+        CBox drawDebugOverlay(const Vector2D& origin, const SDebugSpec& resolved) const;
 
         // Render()/hitTest()'s shared paint-order: a stable sort of
         // m_children by zIndex() (ascending - lower paints first/behind).

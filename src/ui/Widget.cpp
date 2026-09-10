@@ -12,13 +12,34 @@ namespace HyprLUI {
         // overlap at the corners; harmless at this thickness.
         constexpr double STROKE_WIDTH = 1.5;
 
-        void             strokeRect(const CBox& box, const CHyprColor& color) {
+        // Returns `box` itself - the stroke never extends beyond it
+        // (STROKE_WIDTH is drawn just inside the edges, not straddling
+        // them). Included so every draw call in drawDebugOverlay() can
+        // uniformly feed its result to expandBounds() below, whether it
+        // actually expands anything or not.
+        CBox strokeRect(const CBox& box, const CHyprColor& color) {
             if (box.size().x <= 0 || box.size().y <= 0)
-                return;
+                return box;
             gfx::drawRect({box.pos(), {box.size().x, STROKE_WIDTH}}, color);
             gfx::drawRect({{box.pos().x, box.pos().y + box.size().y - STROKE_WIDTH}, {box.size().x, STROKE_WIDTH}}, color);
             gfx::drawRect({box.pos(), {STROKE_WIDTH, box.size().y}}, color);
             gfx::drawRect({{box.pos().x + box.size().x - STROKE_WIDTH, box.pos().y}, {STROKE_WIDTH, box.size().y}}, color);
+            return box;
+        }
+
+        // Unions `b` into `bounds` in place - `bounds` is always assumed
+        // meaningful (callers seed it from the widget's own box first,
+        // never from a genuinely empty state), `b` may be a zero-size
+        // no-op (e.g. drawLabel() on empty text) which this correctly
+        // ignores rather than collapsing `bounds` toward (0,0).
+        void expandBounds(CBox& bounds, const CBox& b) {
+            if (b.size().x <= 0 && b.size().y <= 0)
+                return;
+            const double minX = std::min(bounds.pos().x, b.pos().x);
+            const double minY = std::min(bounds.pos().y, b.pos().y);
+            const double maxX = std::max(bounds.pos().x + bounds.size().x, b.pos().x + b.size().x);
+            const double maxY = std::max(bounds.pos().y + bounds.size().y, b.pos().y + b.size().y);
+            bounds            = CBox{{minX, minY}, {maxX - minX, maxY - minY}};
         }
 
         // Point size every debug label falls back to when neither this
@@ -31,12 +52,18 @@ namespace HyprLUI {
         // of tiny debug labels every frame is a deliberate, accepted
         // tradeoff for a dev-time-only, opt-in tool - not an oversight;
         // see DESIGN.md's debug-overlay notes.
-        void drawLabel(const std::string& text, const Vector2D& pos, const CHyprColor& color, int fontSize) {
+        // Returns the box actually drawn into (zero-size if `text` was
+        // empty or rasterizing failed, which expandBounds() above treats
+        // as a no-op) - see drawDebugOverlay()'s own doc comment for why
+        // callers need this back rather than just drawing and forgetting.
+        CBox drawLabel(const std::string& text, const Vector2D& pos, const CHyprColor& color, int fontSize) {
             if (text.empty())
-                return;
+                return {pos, {0, 0}};
             auto tex = gfx::makeTextTexture(text, color, fontSize, "sans");
-            if (tex)
-                gfx::drawTexture(tex, {pos, tex->m_size});
+            if (!tex)
+                return {pos, {0, 0}};
+            gfx::drawTexture(tex, {pos, tex->m_size});
+            return {pos, tex->m_size};
         }
 
         // "Auto" (unforced) threshold below which detail labels/insets
@@ -83,24 +110,32 @@ namespace HyprLUI {
         return r;
     }
 
-    void CWidget::renderDebug(const Vector2D& origin, const SDebugSpec& inherited) {
+    std::optional<CBox> CWidget::renderDebug(const Vector2D& origin, const SDebugSpec& inherited) {
         if (!m_visible)
-            return;
+            return std::nullopt;
 
-        const SDebugSpec resolved = resolveDebugSpec(inherited);
+        const SDebugSpec    resolved = resolveDebugSpec(inherited);
+        std::optional<CBox> bounds;
         if (resolved.enabled.value_or(false))
-            drawDebugOverlay(origin, resolved);
+            bounds = drawDebugOverlay(origin, resolved);
 
         // Cascade off = wall this subtree off from both my own resolved
         // config AND anything above me - children start completely fresh,
         // not just "without my own overrides" (see setDebugCascade()'s
         // doc comment for why that's the more useful interpretation).
         const SDebugSpec forChildren = m_debugCascade ? resolved : SDebugSpec{};
-        for (auto& child : m_children)
-            child->renderDebug(origin + m_position, forChildren);
+        for (auto& child : m_children) {
+            if (auto childBounds = child->renderDebug(origin + m_position, forChildren)) {
+                if (bounds)
+                    expandBounds(*bounds, *childBounds);
+                else
+                    bounds = childBounds;
+            }
+        }
+        return bounds;
     }
 
-    void CWidget::drawDebugOverlay(const Vector2D& origin, const SDebugSpec& resolved) const {
+    CBox CWidget::drawDebugOverlay(const Vector2D& origin, const SDebugSpec& resolved) const {
         const CBox box       = boxAt(origin);
         const bool bigEnough = box.size().x >= AUTO_MIN_W && box.size().y >= AUTO_MIN_H;
         const int  fontSize  = resolved.fontSize.value_or(DEFAULT_FONT_SIZE);
@@ -118,11 +153,19 @@ namespace HyprLUI {
         const CHyprColor sizeLabelColor{0.4F, 0.95F, 1.0F, 1.0F};
         const CHyprColor metaLabelColor{1.0F, 0.75F, 1.0F, 1.0F};
 
+        // Starts from this widget's own plain content box - the overlay
+        // always covers AT LEAST that much, even if every show* option
+        // below is off - and grows from there via expandBounds() as
+        // margin/label boxes (several of which are deliberately drawn
+        // just outside `box`) actually get drawn. See renderDebug()'s own
+        // doc comment for why CCanvas needs this back.
+        CBox bounds = box;
+
         // Hit-target fill FIRST (underneath the outlines below) - only
         // for widgets that can ever actually match a click (see
         // isInteractive()'s doc comment); forcing debugShow.hitTarget on
         // a purely decorative widget draws nothing, since it would be
-        // actively misleading.
+        // actively misleading. Stays within `box` - no expand needed.
         if (isInteractive() && resolveShow(resolved.showHitTarget, bigEnough))
             gfx::drawRect(box, hitColor);
 
@@ -130,27 +173,28 @@ namespace HyprLUI {
         if (hasMargin && resolveShow(resolved.showMargin, bigEnough)) {
             const CBox marginBox{{box.pos().x - m_margin.left, box.pos().y - m_margin.top},
                                  {box.size().x + m_margin.left + m_margin.right, box.size().y + m_margin.top + m_margin.bottom}};
-            strokeRect(marginBox, marginColor);
-            drawLabel("m:" + formatInsets(m_margin), {marginBox.pos().x, marginBox.pos().y - lineOffset}, marginColor, fontSize);
+            expandBounds(bounds, strokeRect(marginBox, marginColor));
+            expandBounds(bounds, drawLabel("m:" + formatInsets(m_margin), {marginBox.pos().x, marginBox.pos().y - lineOffset}, marginColor, fontSize));
         }
 
         if (resolveShow(resolved.showBox, bigEnough))
-            strokeRect(box, boxColor);
+            strokeRect(box, boxColor); // within `box` already - no expand needed
 
         const bool hasPadding = m_padding.top > 0 || m_padding.right > 0 || m_padding.bottom > 0 || m_padding.left > 0;
         if (hasPadding && resolveShow(resolved.showPadding, bigEnough)) {
             const CBox paddingBox{{box.pos().x + m_padding.left, box.pos().y + m_padding.top},
                                   {box.size().x - m_padding.left - m_padding.right, box.size().y - m_padding.top - m_padding.bottom}};
-            strokeRect(paddingBox, paddingColor);
-            drawLabel("p:" + formatInsets(m_padding), {box.pos().x + 2, box.pos().y + 2}, paddingColor, fontSize);
+            strokeRect(paddingBox, paddingColor); // inside `box` - no expand needed
+            expandBounds(bounds, drawLabel("p:" + formatInsets(m_padding), {box.pos().x + 2, box.pos().y + 2}, paddingColor, fontSize));
         }
 
         if (resolveShow(resolved.showId, bigEnough))
-            drawLabel(m_id, {box.pos().x + 2, box.pos().y - lineOffset}, idLabelColor, fontSize);
+            expandBounds(bounds, drawLabel(m_id, {box.pos().x + 2, box.pos().y - lineOffset}, idLabelColor, fontSize));
 
         if (resolveShow(resolved.showSize, bigEnough))
-            drawLabel(std::to_string(static_cast<int>(box.size().x)) + "x" + std::to_string(static_cast<int>(box.size().y)),
-                      {box.pos().x + box.size().x - (fontSize * 4), box.pos().y + box.size().y + 2}, sizeLabelColor, fontSize);
+            expandBounds(bounds,
+                         drawLabel(std::to_string(static_cast<int>(box.size().x)) + "x" + std::to_string(static_cast<int>(box.size().y)),
+                                   {box.pos().x + box.size().x - (fontSize * 4), box.pos().y + box.size().y + 2}, sizeLabelColor, fontSize));
 
         // z/opacity's AUTO default additionally requires a non-default
         // value to actually be interesting - an explicit
@@ -161,8 +205,10 @@ namespace HyprLUI {
         if (resolveShow(resolved.showZOpacity, bigEnough && nonDefaultMeta)) {
             std::string opacityStr = std::to_string(m_opacity);
             opacityStr.resize(4);
-            drawLabel("z:" + std::to_string(m_zIndex) + " op:" + opacityStr, {box.pos().x + 2, box.pos().y + box.size().y + 2}, metaLabelColor, fontSize);
+            expandBounds(bounds, drawLabel("z:" + std::to_string(m_zIndex) + " op:" + opacityStr, {box.pos().x + 2, box.pos().y + box.size().y + 2}, metaLabelColor, fontSize));
         }
+
+        return bounds;
     }
 
 } // namespace HyprLUI

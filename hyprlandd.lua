@@ -1024,6 +1024,118 @@ hl.bind("ALT + SHIFT + D", function()
 	end
 end, { description = "HyprLUI: open_socket() Hyprland's own event stream, print one event" })
 
+--------------------------------------------------
+---- HYPRLUI FADE ANIMATION TEST (Phase 13) ----
+--------------------------------------------------
+-- Exercises hyprlui.animation() + the opt-in fade path set_widget_visible()/
+-- set_canvas_visible()/window()/remove_widget()/remove_canvas() now take
+-- (DESIGN.md Phase 13). Configuring "in"/"out" once up front, like this, is
+-- the whole API surface - EVERY later visibility change for ANY widget or
+-- window then fades instead of snapping/popping, with no per-call change
+-- needed: ALT+SHIFT+T below (open/close the whole window) fades on its own
+-- purely as a side effect of this config existing, same as ALT+SHIFT+W
+-- (toggle one widget) and ALT+SHIFT+Q (remove one widget for good) below.
+-- Same top-level-call gap as defineComponent()/persistent() above (see
+-- their own comments) - guarded the same way.
+if hl.plugin.hyprlui ~= nil then
+	hl.plugin.hyprlui.animation({ leaf = "in", speed = 3, bezier = "default" })
+	hl.plugin.hyprlui.animation({ leaf = "out", speed = 3, bezier = "default" })
+end
+
+local HYPRLUI_FADE_WINDOW = "hyprlui_fade_test"
+local hyprluiFadeWindowOpen = false
+local hyprluiFadeBoxVisible = true
+
+-- ALT + SHIFT + T: toggle the fade test window.
+hl.bind("ALT + SHIFT + T", function()
+	if hyprluiFadeWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_FADE_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiFadeWindowOpen = false
+		return
+	end
+
+	hyprluiFadeBoxVisible = true
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = HYPRLUI_FADE_WINDOW,
+			anchor = "center",
+			x = 0,
+			y = 60,
+			hl.plugin.hyprlui.Column({
+				id = "root",
+				gap = 8,
+				hl.plugin.hyprlui.Text({ id = "label", text = "ALT+SHIFT+W to fade both boxes", size = 12 }),
+				hl.plugin.hyprlui.Row({
+					id = "boxes",
+					gap = 8,
+					hl.plugin.hyprlui.Box({ id = "fade_box", w = 160, h = 80, color = 0xffcc8833, rounding = 8 }),
+					-- Per-widget override (Phase 13 follow-up) - noticeably
+					-- slower (1.2s vs the global 0.3s) and a different
+					-- curve, so toggling both boxes together with the SAME
+					-- keybind makes the override visibly obvious rather
+					-- than needing a separate bind to prove it does
+					-- anything.
+					hl.plugin.hyprlui.Box({
+						id = "fade_box_custom",
+						w = 160,
+						h = 80,
+						color = 0xff3388cc,
+						rounding = 8,
+						animationIn = { speed = 12, bezier = "default" },
+						animationOut = { speed = 12, bezier = "default" },
+					}),
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.window", err)
+		return
+	end
+	hyprluiFadeWindowOpen = true
+end, { description = "HyprLUI: toggle the fade-animation test window" })
+
+-- ALT + SHIFT + W: toggle both boxes' visibility via set_widget_visible()
+-- - "fade_box" follows the global 0.3s config from above; "fade_box_custom"
+-- overrides it with its own animationIn/animationOut (1.2s) - toggling both at once
+-- with the same keypress makes the per-widget override's effect obvious.
+hl.bind("ALT + SHIFT + W", function()
+	if not hyprluiFadeWindowOpen then
+		return
+	end
+	hyprluiFadeBoxVisible = not hyprluiFadeBoxVisible
+	local ok, err = pcall(hl.plugin.hyprlui.set_widget_visible, HYPRLUI_FADE_WINDOW, "fade_box", hyprluiFadeBoxVisible)
+	if not ok then
+		hyprluiWarn("hyprlui.set_widget_visible", err)
+	end
+	ok, err = pcall(hl.plugin.hyprlui.set_widget_visible, HYPRLUI_FADE_WINDOW, "fade_box_custom", hyprluiFadeBoxVisible)
+	if not ok then
+		hyprluiWarn("hyprlui.set_widget_visible", err)
+	end
+end, { description = "HyprLUI: fade-toggle both test boxes' visibility" })
+
+-- ALT + SHIFT + Q: remove_widget() both boxes for good (not just hide them -
+-- gone, can't be brought back without ALT+SHIFT+T closing/reopening the
+-- whole window) - each fades out using its own config (global vs override)
+-- first and only actually erases once that finishes, instead of vanishing
+-- instantly.
+hl.bind("ALT + SHIFT + Q", function()
+	if not hyprluiFadeWindowOpen then
+		return
+	end
+	local ok, err = pcall(hl.plugin.hyprlui.remove_widget, HYPRLUI_FADE_WINDOW, "fade_box")
+	if not ok then
+		hyprluiWarn("hyprlui.remove_widget", err)
+	end
+	ok, err = pcall(hl.plugin.hyprlui.remove_widget, HYPRLUI_FADE_WINDOW, "fade_box_custom")
+	if not ok then
+		hyprluiWarn("hyprlui.remove_widget", err)
+	end
+end, { description = "HyprLUI: fade-then-remove the test box for good" })
+
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required
 -- w/h fields, so buildWidget() hits requireFieldNumber() -> luaL_error()

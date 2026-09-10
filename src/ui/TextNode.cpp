@@ -43,7 +43,7 @@ namespace HyprLUI {
         // already equal (the common case, and always true when a maxW
         // constraint - not minW - is what's active, since Pango already
         // rasterizes to fit that exactly).
-        const float opacity = parentOpacity * static_cast<float>(m_opacity);
+        const float opacity = composedOpacity(parentOpacity);
         gfx::drawTexture(m_texture, {origin + m_position, m_texture->m_size}, opacity);
     }
 

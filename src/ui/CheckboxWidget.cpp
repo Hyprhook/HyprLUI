@@ -9,7 +9,7 @@ namespace HyprLUI {
         if (!m_visible)
             return;
 
-        const float opacity = parentOpacity * static_cast<float>(m_opacity);
+        const float opacity = composedOpacity(parentOpacity);
 
         CHyprColor  outer = effectiveFillColor(m_color);
         outer.a *= opacity;

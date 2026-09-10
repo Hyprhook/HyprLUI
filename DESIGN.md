@@ -1832,11 +1832,314 @@ piece (raw-keysym limitation).
       is the same defense Watcher.cpp's own timers already use (by
       watcher name, not a pointer) - this project's established pattern
       for the same hazard, not a new one invented here.
-- [ ] **Phase 13** (stretch) - Fade animations via Hyprland's animation
-      manager; metatable-based auto-tracking reactivity underneath the
-      existing `Bind()` surface. Kept last on purpose - animation polish
-      makes the most sense once the widgets it'd animate (and the state
-      that drives them, Phases 11/12) already exist.
+- [x] **Phase 13** (stretch) - Fade animations via Hyprland's animation
+      manager. Kept last on purpose - animation polish makes the most
+      sense once the widgets it'd animate (and the state that drives
+      them, Phases 11/12) already exist.
+    - **Scoped down from the original two-part description**: the
+      "metatable-based auto-tracking reactivity underneath `Bind()`" half
+      was dropped after an explicit discussion - every prior phase (3, 9,
+      11) deliberately chose explicit calls over `__index`/`__newindex`
+      metatable magic, and auto-tracking would have been a one-off reversal
+      of that consistently-applied principle for no pressing need (the
+      explicit `watch()`/`Bind()` surface already works). Phase 13 is
+      animations-only.
+    - Researched Hyprland's OWN animation tree first (`src/config/shared/
+      animation/AnimationTree.cpp`) specifically because the user wanted to
+      mirror its "element + action" shape (`windowsIn`/`windowsOut`/
+      `windowsMove`, `fadeIn`/`fadeOut`, etc., all descending from one
+      `global` root, each leaf inheriting its parent's speed/bezier unless
+      overridden via `hl.animation({leaf=..., ...})`). **Key finding that
+      changed the plan**: `Config::CAnimationTreeController` exposes no
+      public way to register a NEW leaf node from outside -
+      `Hyprutils::Animation::CAnimationConfigTree::createNode()` is a
+      private member (`CAnimationTreeController::reset()` hardcodes the
+      one fixed tree at startup), and `hl.animation()` itself errors with
+      "no such animation leaf" for any name that isn't already one of
+      those. So HyprLUI's widget fades can NOT be configured via the
+      user's existing `hl.animation({leaf="hyprluiIn", ...})` the way that
+      would have been most idiomatic - confirmed dead end before writing
+      any code, not a runtime surprise.
+    - What IS reusable, and independently confirmed working: the bezier-
+      curve registry (`Animation::mgr()->bezierExists()/getBezier()` - a
+      flat name->curve map, entirely separate machinery from the tree, so
+      a user's own `hl.curve()`-defined curves are referenceable by name
+      from HyprLUI too) and the animated-variable ticking/interpolation
+      machinery itself. Confirmed by reading
+      `CHyprAnimationManager::tick()`/`handleUpdate()`: a
+      `CGenericAnimatedVariable` whose `SAnimationContext` has no window/
+      workspace/layer set still gets ticked and interpolated correctly
+      every frame - the `if/else if` chain in `handleUpdate()` only
+      special-cases those three owner types for an early-return (skip if
+      the owning monitor vanished) or a per-window `noAnim` rule check;
+      with none of them set it just falls through to the normal
+      interpolation step. It only skips Hyprland's own per-owner damage
+      bookkeeping, which HyprLUI doesn't want anyway (`CUIManager::
+      damageAll()` already does this, same as `Watcher.cpp`'s `notify()`).
+    - So `CWidgetAnimations` (`Widget.hpp`) is a small, self-contained
+      config store instead of a tree-node registration - exactly 2 shared
+      slots, `IN`/`OUT` (mirroring Hyprland's own windows/fade in-vs-out
+      split, move explicitly deferred - see below), each holding one
+      `SP<SAnimationPropertyConfig>` created ONCE and mutated in place on
+      every later `configure()` call, never replaced. This mutate-not-
+      replace rule matters because widgets' `CAnimatedVariable`s only hold
+      a WEAK reference to it (`CBaseAnimatedVariable::setConfig()`) -
+      swapping in a new object would leave already-animating widgets
+      pointing at a stale one. Confirmed correct by reading
+      `CBaseAnimatedVariable::getPercent()/enabled()/getBezierName()`,
+      which all dereference `m_pConfig->pValues->X` fresh on every single
+      call, never caching - matches exactly how Hyprland's own
+      `CAnimationConfigTree::setConfigForNode()` behaves (mutates a node's
+      existing config in place).
+    - `hyprlui.animation({leaf="in"|"out", enabled=true, speed, bezier})` -
+      deliberately shaped like `hl.animation()`'s own table call (same
+      field names, same `speed` unit - DECISECONDS, confirmed by reading
+      `CBaseAnimatedVariable::getPercent()`'s
+      `(DURATIONPASSED / 100.f) / internalSpeed` calculation) for
+      familiarity, but scoped to exactly the two leaves HyprLUI supports -
+      `leaf` outside `"in"`/`"out"` is a hard `luaL_error`, not silently
+      accepted. Disabled (the default, until this is ever called) means
+      `setVisible()` stays exactly as instant as it always was - purely
+      opt-in, zero behavior change to any existing script that never calls
+      it.
+    - `CWidget::setVisible(bool)` (`Widget.hpp`) now branches on whether
+      the relevant leaf is enabled. Disabled: unchanged instant path
+      (also drops any in-flight `m_visibilityAnim`, so toggling the
+      feature off mid-fade snaps cleanly rather than leaving a stuck
+      partial-opacity state). Enabled: lazily creates a
+      `PHLANIMVAR<float> m_visibilityAnim` the first time it's actually
+      needed (most widgets never touch this, so it's a single null
+      pointer's worth of overhead otherwise) via `Animation::mgr()->
+      createAnimation()`, then animates it toward 1.0 (showing) or 0.0
+      (hiding). Showing flips `m_visible = true` IMMEDIATELY (so the
+      widget still participates in layout/hit-testing from frame 1, same
+      as the instant path always did) and only the opacity ramps up;
+      hiding keeps `m_visible` true and rendering until the fade-out
+      animation's end callback actually flips it false - otherwise the
+      widget would vanish from the tree (and render()'s `if (!m_visible)
+      return`) before ever visibly fading. That end callback re-checks
+      `m_visibilityAnim->goal() == 0.0f` before flipping `m_visible` -
+      guards against a show() reversing the fade mid-flight (the SAME
+      animated variable's goal gets reassigned back to 1.0, but the OLD
+      "hide finished" callback registered by the earlier call would
+      otherwise still fire once THAT new transition completes too,
+      incorrectly re-hiding a widget that just finished fading back in).
+    - `composedOpacity(parentOpacity)` - a new small `CWidget` helper
+      multiplying `parentOpacity * m_opacity * (m_visibilityAnim ?
+      m_visibilityAnim->value() : 1.0F)`. Every `render()` override across
+      the codebase (the default container implementation plus
+      `RectNode`/`TextNode`/`ButtonWidget`/`InputWidget`/
+      `CheckboxWidget`/`ImageWidget`, 7 call sites total) now goes through
+      this instead of inlining `parentOpacity * m_opacity` directly, so
+      the fade applies uniformly without every leaf type needing its own
+      awareness of `m_visibilityAnim`. A widget that's never been animated
+      computes identically to before this phase.
+    - **Verified the internal-API reliance resolves exactly like every
+      other internal dependency this project already leans on**: `nm -D`
+      on the built `.so` shows `Animation::mgr()` and every
+      `CBaseAnimatedVariable`/`CAnimationManager` method as undefined
+      (`U`), resolved against the host Hyprland process at `dlopen()`
+      time, and `CHyprAnimationManager::createAnimation<float>` itself as
+      a defined weak (`W`) template instantiation inside HyprLUI's own
+      `.so` - same mechanism as `g_pEventLoopManager`/`CEventLoopTimer` in
+      Watcher.cpp and NativeServices.cpp.
+    - **Follow-up (same session): the fade also fires on widget/canvas
+      CREATE and REMOVE, not just explicit `set_widget_visible()`/
+      `set_canvas_visible()` toggles** - the user's own explicit ask.
+      `CWidget::setVisible()`'s core logic (instant-vs-animate, plus the
+      reversal-guarded hide-then-flip-invisible callback) was factored out
+      into a free function, `applyAnimatedVisibility()` (Widget.hpp),
+      specifically so `CCanvas::setVisible()` could reuse the exact same
+      logic rather than duplicating it - both a single widget and a whole
+      canvas fade the same way.
+        - `hyprlui.window()` (canvas creation): calls a new
+          `CCanvas::fadeInOnCreate()` right after `setRoot()` - seeds the
+          canvas's own animated opacity at 0 and animates it to 1 if "in"
+          is enabled (a no-op otherwise). `CCanvas::render()` now passes
+          this value as `m_root->render()`'s `parentOpacity` argument
+          (previously always an implicit 1.0F), so it cascades down to
+          every widget in the newly-created tree via their own
+          `composedOpacity()` - the WHOLE window fades in together, not
+          each widget separately, since there's no existing primitive to
+          add a single widget to an already-live canvas (every widget in
+          a window is always created together, at `window()` time).
+        - `hyprlui.remove_widget()`: previously called `removeChild(id)`
+          immediately. Now calls a new `CWidget::fadeOutThenRemove(onDone)`
+          first - fades the target widget out (if "out" is enabled) and
+          only calls `onDone` (which does the actual `removeChild()` +
+          `damage()`) once that finishes; immediate, same as before this
+          follow-up, if "out" isn't enabled. The widget doesn't know its
+          own parent, so it can't erase itself - `onDone` captures the
+          owning `PCanvas` (shared ownership, so the canvas can't be
+          destroyed out from under the deferred callback) and calls
+          `removeChild()` on its root from there.
+        - `CUIManager::removeCanvas()` needed NO changes at all - it
+          already called `canvas->setVisible(false)` before pushing to
+          `m_pendingRemoval`; making `CCanvas::setVisible()` itself
+          animation-aware (via `applyAnimatedVisibility()`) was
+          sufficient; the existing call site just started doing the right
+          thing once the method underneath it changed.
+        - **The one real design gap this follow-up surfaced**: a
+          continuous multi-second fade changes rendered opacity every
+          single frame, unlike every other mutation in this codebase
+          (which changes state once, damages a few frames via
+          `REDAMAGE_FRAMES`, and is done - see `CCanvas::damage()`'s own
+          doc comment for why even a ONE-SHOT change needs that many
+          frames, let alone a continuous animation). Without handling
+          this, a fade would visually freeze after 4 frames even though
+          the underlying value kept interpolating. Fixed with a new
+          `CWidget::isAnimating()` (recursive: true if this widget's own
+          `m_visibilityAnim` or any descendant's is
+          `CBaseAnimatedVariable::isBeingAnimated()`) - `CCanvas::render()`
+          calls `damage()` every frame while either its own fade or
+          `m_root->isAnimating()` is true, continuously re-arming the
+          redamage countdown for as long as the fade actually takes. This
+          also happens to be exactly what makes `removeCanvas()`'s
+          existing `m_pendingRemoval` sweep (which drops a canvas once
+          `!hasPendingRedamage()`) naturally keep a fading-out removed
+          canvas alive for its whole fade with no changes to that sweep's
+          own logic - `hasPendingRedamage()` just stays true for as long
+          as something keeps calling `damage()`.
+    - **Two more ghosting bugs found live while actually testing the fade
+      (same underlying bug CLASS as the original Phase-2 ghost-widget fix
+      - under/mis-damaging, not the original's specific multi-frame-
+      buffer timing cause), both fixed same-session:**
+        1. **Debug overlay under-damage.** Several of its own labels (id,
+           margin, size, z/opacity) are DELIBERATELY drawn just outside a
+           widget's own box (`Widget.cpp`'s `drawDebugOverlay()`) - fine
+           for an ordinary discrete mutation (the overflowing pixels just
+           don't change between mutations, so stale-but-correct sitting
+           there forever is invisible) but visibly ghosts once something
+           (a fade) changes them every frame, since `CCanvas::damage()`
+           only ever damaged the plain content `box()`. Fixed by having
+           `drawDebugOverlay()`/`renderDebug()` return the actual union of
+           every pixel they drew (most already had the position+size on
+           hand, just weren't reporting it) - `CCanvas` tracks this as
+           `m_debugOverflow` (recomputed once per `render()` call) and
+           exposes `fullDamageBox()` (`box()` expanded by that overflow),
+           which every damage call site now uses instead of bare `box()`.
+        2. **Sub-pixel rounding under-damage at window edges** - reported
+           live as "ghosting on the left edge of one window, the top edge
+           of another," which is itself the tell: a FIXED off-by-one in
+           our own math would hit every window's edges the same way;
+           "depends on the window" points at each window's own specific
+           fractional position instead. Root cause, found by reading
+           Hyprland's own `IHyprRenderer::damageBox()`
+           (`src/render/Renderer.cpp`): it does `box.copy().
+           translate(-m->m_position).scale(m->m_scale).round()` -
+           rounding the final SCALED box to integer device pixels.
+           HyprLUI's own canvas positions are frequently fractional
+           (anchor math like `(boxSize.x - m_size.x) / 2.0` for a
+           "center" anchor), and rounding a fractional box can shrink it
+           by up to ~1 device pixel on whichever side the fractional
+           remainder happens to round away from - which side depends on
+           that specific box's own fractional offset, matching the
+           reported symptom exactly. The actual rendered content doesn't
+           go through this same rounding (`CRectPassElement`/
+           `CTexPassElement` position themselves via their own, separate
+           math in `toMonitorLocal()`), so that sliver never gets
+           re-painted. Fixed with a small fixed `EDGE_ROUNDING_PAD = 2.0`
+           (logical pixels) added to every side of `fullDamageBox()`,
+           unconditionally - deliberately not computed precisely per-
+           monitor-scale (would need `currentMonitor()`, which isn't
+           always valid where `damage()` gets called from, e.g. directly
+           from LuaBridge.cpp outside any render pass) for a strip this
+           thin; a few pixels of over-damage is cheap insurance, matching
+           this codebase's existing `REDAMAGE_FRAMES=4` precedent of
+           "generous bound over precise calculation."
+        - Both fixes reinforce the same lesson the original Phase-2 bug
+          already taught: this project's damage model is fundamentally
+          "assume the runtime under/over-rounds or under-covers in ways
+          you can't fully control from here, and budget a deliberate
+          margin rather than chasing pixel-perfect precision."
+    - **`move` is explicitly deferred, not forgotten.** There is currently
+      no primitive to reposition an already-constructed widget at all
+      (widgets are laid out once by their container at construction/
+      re-render time) - animating a position change has nothing to hook
+      into yet. Revisit once/if a position-mutation primitive exists.
+    - **Follow-up (same session): per-widget override of the global
+      in/out config**, per explicit request - the global
+      `hyprlui.animation({leaf="in"|"out", ...})` config from earlier in
+      this phase applies to every widget uniformly; some widgets may want
+      a different speed/curve, or to opt out of a globally-enabled fade
+      entirely.
+        - `CWidget` gained `setFadeInOverride()`/`setFadeOutOverride()`
+          (`SP<SAnimationPropertyConfig>`, null = "use the global config
+          for this leaf" - the default, so nothing changes for a widget
+          that doesn't set either). A widget's own `fadeIn`/`fadeOut`
+          table field (`{ enabled?, speed?, bezier? }` - same shape as
+          `hyprlui.animation()`'s own table, minus `leaf`) is parsed once
+          at construction (`buildWidget()`'s common tail, `LuaBridge.cpp`)
+          into a standalone config via a new `makeAnimationConfig()`
+          helper (`Widget.hpp`) - built once, never mutated in place
+          afterward, unlike the global slots (which DO get mutated live by
+          further `hyprlui.animation()` calls) - there's no live-
+          reconfigure API for one specific widget's own override.
+        - The override REPLACES the global config for that widget/leaf
+          entirely rather than merging with it - a widget setting
+          `fadeIn = { speed = 5 }` does not inherit the global's bezier,
+          it gets `"default"` unless it names its own. This also means a
+          widget can force `fadeOut = { enabled = false }` to opt itself
+          OUT of a globally-enabled fade (or the reverse: `fadeIn`
+          enabled on one widget while the global "in" leaf stays off).
+        - `applyAnimatedVisibility()` (the shared `CWidget`/`CCanvas`
+          helper from earlier in this phase) was refactored to take an
+          already-RESOLVED `enabled`/`config` pair instead of looking up
+          `CWidgetAnimations::get()` itself - `CWidget::setVisible()`/
+          `fadeOutThenRemove()` now resolve "this widget's own override if
+          it has one, else the global config for this leaf" before
+          calling it; `CCanvas` (which has no per-widget-style override
+          concept - a whole window is one thing, not a tree of
+          independently-overridable widgets) just passes the global
+          config straight through, unchanged from before this follow-up.
+    - **Second follow-up (same session), per explicit request**: (1) a
+      window's open/close should be governed by the exact same mechanism
+      as an explicit visibility toggle or `remove_widget()` - no separate
+      "creation animation" concept; (2) the whole feature renamed away
+      from "fade" - `fadeIn`/`fadeOut` → `animationIn`/`animationOut`
+      (Lua fields), `setFadeInOverride`/`setFadeOutOverride` →
+      `setAnimationInOverride`/`setAnimationOutOverride`,
+      `fadeOutThenRemove` → `animateOutThenRemove`,
+      `CCanvas::fadeInOnCreate()` removed entirely (see below) - opacity
+      is the only thing actually animated today, but the "in"/"out"
+      leaf/override mechanism itself is generic, so nothing in the public
+      surface should imply it's opacity-only.
+        - This actually simplified (1) automatically: `CCanvas` no longer
+          has its own separate `m_visibilityAnim`/animated `setVisible()`
+          at all - `CCanvas::setVisible()`/`visible()` now delegate
+          entirely to the root widget's own `setVisible()`/`visible()`
+          (falling back to a plain bool only in the - never actually
+          observed - window between `createCanvas()` and `setRoot()`
+          within a single `hyprlui.window()` call). A window fading in/out
+          IS its root widget fading in/out, which already cascades to
+          every descendant via `composedOpacity()`'s multiplicative
+          chain - not a second, separate animated value layered on top.
+          `CCanvas::render()` now passes a plain `1.0F` as
+          `m_root->render()`'s `parentOpacity` (the root's own
+          `composedOpacity()` already folds in its own animation
+          progress) and gates on `m_root->visible()` instead of its own
+          field; the continuous re-damage-while-animating check collapses
+          to just `m_root->isAnimating()`.
+        - `hyprlui.window()`'s creation path replaced
+          `canvas->fadeInOnCreate()` with a new `CWidget::primeHidden()`
+          (forces `m_visible = false` and drops any in-flight animation,
+          with NO end-callback - a raw state reset, not an animated hide)
+          immediately followed by `root->setVisible(true)` - the exact
+          same call an explicit `set_widget_visible(window, id, true)`
+          makes, just on the root widget specifically. `primeHidden()`
+          exists only because `setVisible(true)` needs something to
+          animate FROM; calling `setVisible(false)` there instead would be
+          wrong whenever "out" also happens to be enabled (it would
+          itself animate 1→0 instead of snapping, defeating the point).
+        - `CUIManager::removeCanvas()` needed NO changes at all (again) -
+          it already called `canvas->setVisible(false)`, which now
+          transparently delegates to the root's own (possibly overridden)
+          `setVisible(false)`.
+        - Net effect: a root widget's own `animationIn`/`animationOut`
+          override now ALSO governs its whole window's open/close, with
+          no separate per-canvas override concept needed - exactly the
+          "should not distinguish toggle vs. creation/removal" requirement
+          this follow-up was about.
 
 ## Open questions
 

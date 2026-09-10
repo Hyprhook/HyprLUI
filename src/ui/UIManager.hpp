@@ -50,7 +50,10 @@ namespace HyprLUI {
         // it), but keeps the underlying CCanvas alive a few more frames in
         // m_pendingRemoval purely to finish clearing its old on-screen
         // footprint - see CCanvas::damage()'s doc comment for why a single
-        // damage-then-destroy isn't enough on its own.
+        // damage-then-destroy isn't enough on its own. If a fade-out
+        // animation (Phase 13) is enabled, it's kept alive for the whole
+        // fade instead (still actually rendering, fading down) - see
+        // CUIManager::renderOverlay()'s own comment on m_pendingRemoval.
         void    removeCanvas(const std::string& name);
         bool    hasCanvas(const std::string& name) const;
         PCanvas getCanvas(const std::string& name) const;

@@ -16,7 +16,7 @@ namespace HyprLUI {
         // explicit fixed w/h is the expected/desired behavior here (see
         // ImageWidget.hpp's doc comment), so the layout box IS the draw
         // box.
-        gfx::drawTexture(m_texture, boxAt(origin), parentOpacity * static_cast<float>(m_opacity), m_rounding);
+        gfx::drawTexture(m_texture, boxAt(origin), composedOpacity(parentOpacity), m_rounding);
     }
 
     void CImageWidget::setImage(const std::string& path) {

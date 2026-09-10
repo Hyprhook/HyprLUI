@@ -68,7 +68,8 @@ namespace HyprLUI {
         // pixels left behind by a removed/hidden window.
         void render();
 
-        // Marks this canvas's full box dirty so Hyprland schedules a
+        // Marks this canvas's full box dirty (see fullDamageBox() below -
+        // NOT the plain content box() alone) so Hyprland schedules a
         // repaint that actually includes it, AND keeps re-damaging that
         // same box for the next REDAMAGE_FRAMES real frames (via render()
         // above). A single damage() call is not reliably enough: Hyprland
@@ -87,6 +88,51 @@ namespace HyprLUI {
         // after any mutation of the tree (the Lua bridge does this for you
         // on every mutating call).
         void damage();
+
+        // box() expanded to also cover however far the debug overlay
+        // (Phase 7/13) currently draws beyond it on each side - several of
+        // its own labels (id, margin, size, z/opacity) are DELIBERATELY
+        // drawn just outside a widget's own box (see Widget.cpp's
+        // drawDebugOverlay()), so box() alone under-damages them. This
+        // under-damage is invisible for an ordinary discrete mutation
+        // (the overflowing pixels just don't happen to change between
+        // mutations, so stale-but-correct pixels sitting there forever
+        // looks fine) but visibly ghosts the instant something DOES keep
+        // changing there every frame - a Phase 13 fade being the most
+        // common case, since composedOpacity() affects the debug overlay
+        // too. `m_debugOverflow` is recomputed once per render() call from
+        // renderDebug()'s returned bounds (one-frame-stale outside of
+        // that, e.g. for a damage() call made directly from LuaBridge.cpp
+        // mid-mutation rather than from within render() - self-correcting
+        // next frame, same tolerance this codebase already accepts
+        // elsewhere for "redo it every frame" values).
+        //
+        // Also pads every side by EDGE_ROUNDING_PAD regardless of debug -
+        // found live (Phase 13 fades specifically): Hyprland's own
+        // IHyprRenderer::damageBox() does
+        // `box.copy().translate(-m->m_position).scale(m->m_scale).round()`
+        // - rounding the final SCALED box to integer device pixels. Our
+        // own positions are frequently fractional (anchor math like
+        // `(boxSize.x - m_size.x) / 2.0` for a "center" anchor), and
+        // rounding a fractional box can shrink it by up to ~1 device
+        // pixel on whichever side the fractional remainder happens to
+        // round away from - WHICH side depends on that window's own
+        // specific fractional offset (confirmed: two different test
+        // windows each ghosted on a different single edge - left for
+        // one, top for the other - matching "it depends on this box's own
+        // fractional position," not a fixed off-by-one in our own math).
+        // The actual rendered content doesn't go through this same
+        // rounding (CRectPassElement/CTexPassElement position themselves
+        // via their own, separate math), so that sliver never gets
+        // re-painted. A few logical-pixel pad survives this regardless of
+        // scale - cheap insurance, not worth computing precisely per-
+        // monitor-scale for a strip this thin.
+        static constexpr double EDGE_ROUNDING_PAD = 2.0;
+        CBox                    fullDamageBox() const {
+            const double left = m_debugOverflow.left + EDGE_ROUNDING_PAD, top = m_debugOverflow.top + EDGE_ROUNDING_PAD;
+            const double right = m_debugOverflow.right + EDGE_ROUNDING_PAD, bottom = m_debugOverflow.bottom + EDGE_ROUNDING_PAD;
+            return {{m_position.x - left, m_position.y - top}, {m_size.x + left + right, m_size.y + top + bottom}};
+        }
 
         // Whether damage() still has redamage frames pending - used by
         // CUIManager to know when a removed canvas has finished clearing
@@ -111,7 +157,7 @@ namespace HyprLUI {
         // accessor returns this same space, no per-monitor transform
         // needed here unlike rendering's toMonitorLocal()).
         CWidget* hitTest(const Vector2D& pt) const {
-            return (m_visible && m_root) ? m_root->hitTest(m_position, pt) : nullptr;
+            return (m_root && m_root->visible()) ? m_root->hitTest(m_position, pt) : nullptr;
         }
 
         // Creation-order stamp, set once by CUIManager::createCanvas() -
@@ -230,11 +276,35 @@ namespace HyprLUI {
             m_fixedH = h;
         }
 
+        // Delegates entirely to the root widget's own setVisible()/
+        // visible() - a "window" fading in/out IS its root widget fading
+        // in/out (which already cascades to every descendant via
+        // composedOpacity()'s multiplicative chain), not a second,
+        // separate animated value layered on top. This is what makes
+        // hyprlui.set_canvas_visible(), hyprlui.window()'s creation
+        // (LuaBridge.cpp primes the root hidden then calls
+        // setVisible(true) on it), CUIManager::removeCanvas() (calls this
+        // with `false`), hyprlui.set_widget_visible(), and
+        // hyprlui.remove_widget() all go through the EXACT same
+        // mechanism (CWidget::setVisible()/animateOutThenRemove()) - a
+        // widget/window's animationIn/animationOut doesn't distinguish
+        // WHY it's transitioning, only whether it's becoming visible or
+        // hidden. A root widget with its own animationIn/animationOut
+        // override (see CWidget::setAnimationInOverride()) therefore
+        // governs its whole window's fade too, with no separate
+        // per-canvas override concept needed. Falls back to a plain bool
+        // if there's no root yet (a transient state between createCanvas()
+        // and setRoot() within a single hyprlui.window() call - never
+        // actually observed mid-frame, but harmless to guard against).
         void setVisible(bool visible) {
-            m_visible = visible;
+            if (m_root) {
+                m_root->setVisible(visible);
+                return;
+            }
+            m_visibleFallback = visible;
         }
         bool visible() const {
-            return m_visible;
+            return m_root ? m_root->visible() : m_visibleFallback;
         }
 
         EZOrder zorder() const {
@@ -255,7 +325,7 @@ namespace HyprLUI {
         Vector2D                             m_size;
         std::optional<double>                m_fixedW, m_fixedH;
         EZOrder                              m_zorder;
-        bool                                 m_visible = true;
+        bool                                 m_visibleFallback = true; // only consulted while m_root is null - see visible()/setVisible()
         PWidget                              m_root;
         std::optional<EAnchor>               m_anchor;
         std::string                          m_anchorMonitor;
@@ -265,6 +335,7 @@ namespace HyprLUI {
         std::vector<std::function<void()>>   m_bindings;
         uint64_t                             m_sequence = 0;
         std::function<void(const Vector2D&)> m_onSizeChanged;
+        SEdgeInsets                          m_debugOverflow; // how far the debug overlay currently draws beyond box() on each side - see fullDamageBox()
     };
 
     using PCanvas = std::shared_ptr<CCanvas>;

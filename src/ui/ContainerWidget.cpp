@@ -1,6 +1,7 @@
 #include "ContainerWidget.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace HyprLUI {
 
@@ -72,10 +73,18 @@ namespace HyprLUI {
             else if (m_align == EAlign::End)
                 crossPos = crossPadLead + availableCross - crossTrail - childCross;
 
+            // Rounded to whole pixels - EAlign::Center's own `/ 2.0` above
+            // can land on a fractional pixel whenever (availForThis -
+            // childCross) is odd. Found live: a texture (text especially)
+            // drawn 1:1 but at a fractional destination offset still
+            // samples a blended average of two adjacent texels per pixel
+            // under Hyprland's GL_LINEAR filtering, instead of one exact
+            // texel each - visibly blurry. See Canvas.cpp's
+            // recomputeAnchorPosition() for the same fix, same reasoning.
             if (m_direction == EFlexDirection::Row)
-                child->setPosition({offset + mainLead, crossPos});
+                child->setPosition({std::round(offset + mainLead), std::round(crossPos)});
             else
-                child->setPosition({crossPos, offset + mainLead});
+                child->setPosition({std::round(crossPos), std::round(offset + mainLead)});
 
             offset += mainLead + childMain + mainTrail + m_gap;
         }

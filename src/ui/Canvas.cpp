@@ -5,6 +5,7 @@
 #include <hyprland/src/state/MonitorState.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 namespace HyprLUI {
 
@@ -30,7 +31,7 @@ namespace HyprLUI {
             // setFixedSize()'s doc comment for what that breaks.
             const Vector2D contentSize{m_fixedW ? *m_fixedW : m_root->size().x, m_fixedH ? *m_fixedH : m_root->size().y};
             if (contentSize.x != m_size.x || contentSize.y != m_size.y) {
-                gfx::damageBox(box()); // old footprint, in case it shrunk
+                gfx::damageBox(fullDamageBox()); // old footprint, in case it shrunk - including debug overlay overflow, see fullDamageBox()'s doc comment
                 m_size = contentSize;
                 damage(); // new footprint (at the still-current position) + arms the redamage countdown
                 if (m_onSizeChanged)
@@ -52,15 +53,33 @@ namespace HyprLUI {
         // comment in Canvas.hpp for why a single damage() call isn't
         // enough on its own.
         if (m_pendingRedamageFrames > 0) {
-            gfx::damageBox(box());
+            gfx::damageBox(fullDamageBox());
             --m_pendingRedamageFrames;
         }
 
-        if (!m_visible || !m_root)
+        if (!m_root || !m_root->visible())
             return;
 
+        // An animation changes rendered opacity every frame for its whole
+        // duration - keep re-damaging every frame while anything in this
+        // window's tree (including the root itself) is still animating,
+        // same reasoning as damage()'s own multi-frame redamage countdown
+        // above, just driven continuously instead of a fixed 4-frame
+        // burst. This is also what keeps a removeCanvas()'d, fading-out
+        // canvas alive in CUIManager's m_pendingRemoval for as long as its
+        // animation actually takes: hasPendingRedamage() (which that
+        // sweep checks) stays true as long as damage() keeps getting
+        // called.
+        if (m_root->isAnimating())
+            damage();
+
         m_root->arrange();
-        m_root->render(m_position);
+        // No separate canvas-level opacity multiplier - the root widget's
+        // own composedOpacity() already folds in its own animationIn/
+        // animationOut progress (see CWidget::setVisible()), which is all
+        // "a window fading" ever was under the hood. parentOpacity here
+        // is a plain 1.0, same as any other widget's topmost ancestor.
+        m_root->render(m_position, 1.0F);
 
         // Debug overlay (box-model outlines/labels) is an entirely
         // separate pass, run AFTER normal content so it always paints on
@@ -69,11 +88,28 @@ namespace HyprLUI {
         // "nothing enabled, everything auto" at the root; a widget only
         // actually draws anything once it (or an ancestor that hasn't
         // walled itself off) sets `debug = true`.
-        m_root->renderDebug(m_position, {});
+        const auto debugBounds = m_root->renderDebug(m_position, {});
+
+        // Recompute how far that overlay currently extends beyond box()
+        // on each side, for fullDamageBox() to use on the NEXT damage()
+        // call (this frame's own damage() calls above already happened,
+        // using whatever this was last frame - one-frame-stale,
+        // self-correcting, same tolerance this codebase already accepts
+        // elsewhere for "redo it every frame" values). No overlay active
+        // anywhere this frame (debugBounds is nullopt, the common case)
+        // means zero overflow, i.e. fullDamageBox() == box() exactly.
+        m_debugOverflow = {};
+        if (debugBounds) {
+            const auto b           = box();
+            m_debugOverflow.left   = std::max(0.0, b.pos().x - debugBounds->pos().x);
+            m_debugOverflow.top    = std::max(0.0, b.pos().y - debugBounds->pos().y);
+            m_debugOverflow.right  = std::max(0.0, (debugBounds->pos().x + debugBounds->size().x) - (b.pos().x + b.size().x));
+            m_debugOverflow.bottom = std::max(0.0, (debugBounds->pos().y + debugBounds->size().y) - (b.pos().y + b.size().y));
+        }
     }
 
     void CCanvas::damage() {
-        gfx::damageBox(box());
+        gfx::damageBox(fullDamageBox());
         m_pendingRedamageFrames = REDAMAGE_FRAMES;
     }
 
@@ -140,6 +176,21 @@ namespace HyprLUI {
             case EAnchor::BottomRight: pos = {boxPos.x + boxSize.x - m_size.x - m_anchorOffset.x, boxPos.y + boxSize.y - m_size.y - m_anchorOffset.y}; break;
         }
 
+        // Center/Top/Left/Right/Bottom's own `/ 2.0` above can land on a
+        // fractional pixel whenever (boxSize - m_size) is odd. Found live:
+        // Hyprland samples text/image textures with GL_LINEAR unless it
+        // detects an exact 1:1 pixel match (CHyprOpenGLImpl::
+        // renderTextureInternal(), src/render/OpenGL.cpp) - a texture
+        // drawn 1:1 but at a fractional DESTINATION offset still ends up
+        // reading a blended average of two adjacent texels per pixel
+        // instead of one exact texel each, which reads as visibly blurry
+        // for anything with sharp contrast (text especially; a solid-
+        // color rect looks fine since its neighboring texels are the same
+        // color anyway). Rounding here means every OTHER position this
+        // window's tree computes from m_position stays whole-pixel too.
+        pos.x = std::round(pos.x);
+        pos.y = std::round(pos.y);
+
         if (pos.x == m_position.x && pos.y == m_position.y)
             return false;
 
@@ -147,7 +198,9 @@ namespace HyprLUI {
         // a plain damage() after moving only covers the new box, leaving
         // the old one's pixels stale (same class of bug damage() itself
         // now guards against for mutations - see its doc comment).
-        const auto oldBox = this->box();
+        // fullDamageBox() (not the plain box()) so the debug overlay's
+        // own overflow moves with it too.
+        const auto oldBox = this->fullDamageBox();
         m_position        = pos;
         gfx::damageBox(oldBox);
         damage();

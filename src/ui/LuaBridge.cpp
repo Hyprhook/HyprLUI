@@ -168,6 +168,45 @@ namespace HyprLUI::Lua {
             return parseColorField(L, idx, key, CHyprColor{}, fnName);
         }
 
+        // Phase 13 follow-up: a widget's own `animationIn`/`animationOut`
+        // field (see buildWidget()'s common tail) - a per-widget override
+        // of hyprlui.animation()'s global "in"/"out" config, self-
+        // contained like the global one's own table shape (leaf implied
+        // by which field this is), not a partial merge with it. Returns
+        // nullptr if the field isn't present at all (the common case -
+        // "use the global config for this widget"). `speed`/`bezier` are
+        // only required when the table doesn't explicitly set `enabled =
+        // false` - same conditional-requirement shape as hl.animation()/
+        // hyprlui.animation() themselves.
+        SP<Hyprutils::Animation::SAnimationPropertyConfig> optAnimationOverrideField(lua_State* L, int idx, const char* key, const char* fnName) {
+            lua_getfield(L, idx, key);
+            if (lua_isnil(L, -1)) {
+                lua_pop(L, 1);
+                return nullptr;
+            }
+            if (!lua_istable(L, -1))
+                luaL_error(L, "%s: field '%s' must be a table", fnName, key);
+
+            const int                                          tblIdx  = lua_gettop(L);
+            const bool                                         enabled = optFieldBool(L, tblIdx, "enabled", true);
+
+            SP<Hyprutils::Animation::SAnimationPropertyConfig> cfg;
+            if (!enabled) {
+                cfg = makeAnimationConfig(false, 1.f, "default");
+            } else {
+                const double speed = requireFieldNumber(L, tblIdx, "speed", fnName);
+                if (speed <= 0)
+                    luaL_error(L, "%s: field '%s': speed must be greater than 0", fnName, key);
+                const auto bezier = optFieldString(L, tblIdx, "bezier", "default");
+                if (!Animation::mgr()->bezierExists(bezier))
+                    luaL_error(L, "%s: field '%s': no such bezier \"%s\"", fnName, key, bezier.c_str());
+                cfg = makeAnimationConfig(true, static_cast<float>(speed), bezier);
+            }
+
+            lua_pop(L, 1); // the animationIn/animationOut table itself
+            return cfg;
+        }
+
         // `padding`/`margin` fields (Phase 7) accept either a single
         // number (applied uniformly to all four sides, the common case)
         // or a table { top, right, bottom, left } (each defaulting to 0
@@ -699,6 +738,13 @@ namespace HyprLUI::Lua {
             if (auto onClick = fieldZeroArgFn(L, idx, "onClick"))
                 widget->setOnClick(std::move(onClick));
 
+            // Per-widget animation override (Phase 13 follow-up) - see
+            // optAnimationOverrideField()'s own doc comment. nullptr (the
+            // common case) leaves this widget on the global
+            // hyprlui.animation() config for that leaf.
+            widget->setAnimationInOverride(optAnimationOverrideField(L, idx, "animationIn", "hyprlui"));
+            widget->setAnimationOutOverride(optAnimationOverrideField(L, idx, "animationOut", "hyprlui"));
+
             // Fixed-size override - meaningful for containers (whose w/h
             // are genuinely optional) and Image (whose natural size comes
             // from the decoded texture, same "size-to-content unless
@@ -847,6 +893,12 @@ namespace HyprLUI::Lua {
                 for (auto& binding : bindings)
                     canvas->addBinding(std::move(binding));
                 canvas->setRoot(root);
+                // Same mechanism as any other setVisible(true) - see
+                // CWidget::primeHidden()'s doc comment for why the root
+                // needs to be primed hidden first: a plain setVisible(true)
+                // alone would have nothing to animate FROM.
+                root->primeHidden();
+                root->setVisible(true);
                 canvas->damage();
                 return 0;
             }
@@ -934,6 +986,8 @@ namespace HyprLUI::Lua {
                     [name, monitorName, edge, sizeAlong](const Vector2D& newSize) { CReservedAreaComposer::get().setContribution(name, monitorName, edge, sizeAlong(newSize)); });
             }
 
+            root->primeHidden();
+            root->setVisible(true);
             canvas->damage();
             return 0;
         }
@@ -1150,7 +1204,24 @@ namespace HyprLUI::Lua {
             if (CUIManager::get().isFocused(canvasName, id))
                 CUIManager::get().blurFocusedInput();
 
-            canvas->root()->removeChild(id);
+            auto* widget = canvas->root()->findWidget(id);
+            if (!widget) {
+                canvas->damage(); // matches removeChild()'s own prior no-op-if-missing behavior
+                return 0;
+            }
+
+            // Phase 13: animates this widget out first (if "out" is
+            // enabled) and only actually erases it from the tree once
+            // that finishes - immediately, same as before Phase 13, if
+            // it isn't. `canvas` (a PCanvas, shared ownership) is
+            // captured by the deferred callback so the canvas itself
+            // can't have been destroyed out from under it in the
+            // meantime.
+            widget->animateOutThenRemove([canvas, id]() {
+                if (canvas->root())
+                    canvas->root()->removeChild(id);
+                canvas->damage();
+            });
             canvas->damage();
             return 0;
         }
@@ -1275,6 +1346,47 @@ namespace HyprLUI::Lua {
             return 0;
         }
 
+        // Phase 13 (DESIGN.md) - hyprlui.animation({leaf="in"|"out",
+        // enabled=true, speed, bezier}). Deliberately only "in"/"out" -
+        // not hooked into Hyprland's own animation tree at all (verified:
+        // no public API to register a new leaf node there - see
+        // CWidgetAnimations' doc comment in Widget.hpp), so this is a
+        // self-contained, separate config surface, shaped to LOOK like
+        // hl.animation()'s own table call for familiarity, but scoped to
+        // exactly the two leaves HyprLUI actually supports. `speed` is in
+        // deciseconds, same unit as hl.animation().
+        int luaAnimation(lua_State* L) {
+            luaL_checktype(L, 1, LUA_TTABLE);
+
+            const auto               leaf = requireFieldString(L, 1, "leaf", "hyprlui.animation");
+
+            CWidgetAnimations::EKind kind;
+            if (leaf == "in")
+                kind = CWidgetAnimations::IN;
+            else if (leaf == "out")
+                kind = CWidgetAnimations::OUT;
+            else
+                return luaL_error(L, R"(hyprlui.animation: leaf must be "in" or "out", got "%s")", leaf.c_str());
+
+            const bool enabled = optFieldBool(L, 1, "enabled", true);
+
+            if (!enabled) {
+                CWidgetAnimations::get().configure(kind, false, 1.f, "default");
+                return 0;
+            }
+
+            const double speed = requireFieldNumber(L, 1, "speed", "hyprlui.animation");
+            if (speed <= 0)
+                return luaL_error(L, "hyprlui.animation(\"%s\"): speed must be greater than 0", leaf.c_str());
+
+            const auto bezier = optFieldString(L, 1, "bezier", "default");
+            if (!Animation::mgr()->bezierExists(bezier))
+                return luaL_error(L, R"(hyprlui.animation("%s"): no such bezier "%s")", leaf.c_str(), bezier.c_str());
+
+            CWidgetAnimations::get().configure(kind, true, static_cast<float>(speed), bezier);
+            return 0;
+        }
+
         int luaFocusWidget(lua_State* L) {
             const std::string canvasName = luaL_checkstring(L, 1);
             const std::string id         = luaL_checkstring(L, 2);
@@ -1363,6 +1475,7 @@ namespace HyprLUI::Lua {
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "persistent", &luaPersistent);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "run_cmd", &luaRunCmd);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "open_socket", &luaOpenSocket);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "animation", &luaAnimation);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "focus_widget", &luaFocusWidget);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "blur_widget", &luaBlurWidget);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "defineComponent", &luaDefineComponent);
@@ -1398,6 +1511,7 @@ namespace HyprLUI::Lua {
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "persistent");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "run_cmd");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "open_socket");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "animation");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "focus_widget");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "blur_widget");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "defineComponent");

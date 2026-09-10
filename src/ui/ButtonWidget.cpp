@@ -8,12 +8,12 @@ namespace HyprLUI {
             return;
 
         CHyprColor faded = effectiveFillColor(m_color);
-        faded.a *= parentOpacity * static_cast<float>(m_opacity);
+        faded.a *= composedOpacity(parentOpacity);
         gfx::drawRect(boxAt(origin), faded, m_rounding);
-        // CWidget::render() multiplies in m_opacity itself before handing
-        // that composed value to children - passing parentOpacity (NOT the
-        // already-self-multiplied `faded.a` factor above) here avoids
-        // applying this widget's own opacity to its children twice.
+        // CWidget::render() composes in m_opacity (and any visibility-fade
+        // progress) itself before handing that to children - passing
+        // parentOpacity (NOT the already-self-composed `faded.a` factor
+        // above) here avoids applying this widget's own opacity twice.
         CWidget::render(origin, parentOpacity); // draws children (e.g. a label) on top, at their own manual x/y
     }
 

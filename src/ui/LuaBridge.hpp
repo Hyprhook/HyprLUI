@@ -305,6 +305,30 @@
 //     interactive widget with no onScroll set behaves exactly as if
 //     HyprLUI weren't there.
 //
+//   animationIn, animationOut (Phase 13 follow-up)
+//     Optional tables ({ enabled?, speed?, bezier? } - same shape as
+//     hyprlui.animation()'s own table, minus `leaf`, which leaf this is
+//     is implied by which field it's under) overriding the GLOBAL
+//     hyprlui.animation({leaf="in"|"out", ...}) config for just this one
+//     widget. Self-contained, not a partial merge with the global config -
+//     a widget setting animationIn = { speed = 5 } does NOT inherit the
+//     global's bezier, it gets "default" unless it names its own.
+//     `enabled` defaults to true when the table is given at all;
+//     explicitly setting `enabled = false` forces this ONE widget's
+//     toggle to stay instant even if the global leaf is enabled elsewhere
+//     - `speed`/`bezier` are irrelevant and may be omitted in that case.
+//     A widget with neither field set (the common case) just follows
+//     whatever the global config for each leaf currently is, same as
+//     before this existed. Used identically regardless of WHY visibility
+//     is changing - an explicit set_widget_visible() call, this widget
+//     being removed via remove_widget(), or (if this is a window's root
+//     widget) the whole window opening via window() or closing via
+//     remove_canvas()/set_canvas_visible() - there is no separate
+//     creation/removal animation concept, just becoming visible or
+//     becoming hidden. Deliberately not named "fade" - opacity is the
+//     only thing actually animated today, but the mechanism itself is
+//     generic.
+//
 // Composability (Phase 9, DESIGN.md):
 //
 //   defineComponent(name, { props?, render })

@@ -8,7 +8,7 @@ namespace HyprLUI {
             return;
 
         CHyprColor faded = m_color;
-        faded.a *= parentOpacity * static_cast<float>(m_opacity);
+        faded.a *= composedOpacity(parentOpacity);
         gfx::drawRect(boxAt(origin), faded, m_rounding);
     }
 

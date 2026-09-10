@@ -221,9 +221,16 @@ namespace HyprLUI {
 
         // Ticked once per real frame here (RENDER_LAST_MOMENT fires
         // unconditionally every frame, per monitor, regardless of whether
-        // HyprLUI has any overlay content) - render() on an invisible,
-        // rootless pending-removal canvas only runs its redamage
-        // countdown, draws nothing. Swept out once that countdown hits 0.
+        // HyprLUI has any overlay content). A rootless pending-removal
+        // canvas's render() only runs its redamage countdown and draws
+        // nothing. A canvas removed WHILE a fade-out (Phase 13) is
+        // enabled is different: removeCanvas() calls setVisible(false)
+        // on it, which keeps m_visible true (and therefore still
+        // actually rendering, fading down) for the whole animation -
+        // render()'s own continuous self-damaging while animating (see
+        // Canvas.cpp) keeps hasPendingRedamage() true for exactly that
+        // long, so this sweep naturally doesn't drop it early. Swept out
+        // once the countdown (and any fade) has actually finished.
         for (const auto& canvas : m_pendingRemoval)
             canvas->render();
         std::erase_if(m_pendingRemoval, [](const PCanvas& c) { return !c->hasPendingRedamage(); });

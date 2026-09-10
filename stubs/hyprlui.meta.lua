@@ -88,6 +88,34 @@
 ---@field write fun(self: HyprLUI.Socket, data: string): nil
 ---@field close fun(self: HyprLUI.Socket): nil
 
+-- hyprlui.animation({leaf="in"|"out", ...}) (Phase 13, DESIGN.md) -
+-- configures the shared fade duration/curve for set_widget_visible()
+-- transitions. NOT the same tree as Hyprland's own hl.animation() -
+-- verified there's no public API to register a new leaf into that tree
+-- from outside, so this is a small separate config surface, shaped like
+-- hl.animation()'s own table call for familiarity. `speed` is in
+-- deciseconds (tenths of a second), same unit hl.animation() uses.
+-- `enabled` defaults to true; pass enabled=false to turn an already-
+-- configured leaf back into an instant (non-animated) toggle - speed/
+-- bezier are irrelevant and may be omitted in that case.
+---@class HyprLUI.AnimationOpts
+---@field leaf "in"|"out"
+---@field enabled? boolean
+---@field speed? number
+---@field bezier? string
+
+-- A widget's own `animationIn`/`animationOut` field (Phase 13 follow-up) -
+-- same shape as HyprLUI.AnimationOpts minus `leaf` (implied by which
+-- field this is), overriding hyprlui.animation()'s global config for just
+-- this ONE widget. Self-contained, not a partial merge with the global
+-- config - `speed`/`bezier` are only required unless this explicitly sets
+-- `enabled = false` (which forces this widget's toggle to stay instant
+-- even if the global leaf is enabled).
+---@class HyprLUI.AnimationOverride
+---@field enabled? boolean
+---@field speed? number
+---@field bezier? string
+
 -- Either a single number (applied to all four sides) or a table with any
 -- subset of sides given (an omitted side defaults to 0, NOT to whatever
 -- the uniform-number form would have used) - same convention `color`
@@ -159,6 +187,8 @@
 ---@field onHoverEnd? HyprLUI.OnHoverFn
 ---@field onScroll? HyprLUI.OnScrollFn
 ---@field onClick? HyprLUI.OnClickFn
+---@field animationIn? HyprLUI.AnimationOverride
+---@field animationOut? HyprLUI.AnimationOverride
 ---@field [integer] HyprLUI.WidgetSpec
 
 -- `delta` is the raw IPointer::SAxisEvent value forwarded as-is (no
@@ -370,6 +400,7 @@
 ---@field blur_widget fun(): nil
 ---@field run_cmd fun(cmd: string, callback: HyprLUI.RunCmdCallback): nil
 ---@field open_socket fun(path: string, callback: HyprLUI.OpenSocketCallback): nil
+---@field animation fun(opts: HyprLUI.AnimationOpts): nil
 
 ---@type HyprLUI.API
 ---@diagnostic disable-next-line: missing-fields

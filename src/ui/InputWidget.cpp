@@ -34,7 +34,7 @@ namespace HyprLUI {
             return;
 
         CHyprColor faded = effectiveFillColor(m_color);
-        faded.a *= parentOpacity * static_cast<float>(m_opacity);
+        faded.a *= composedOpacity(parentOpacity);
         gfx::drawRect(boxAt(origin), faded, m_rounding);
         // See CButtonWidget::render()'s comment - pass parentOpacity, not
         // an already-self-multiplied value, so m_opacity isn't applied to
