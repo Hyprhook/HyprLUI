@@ -278,26 +278,37 @@ namespace HyprLUI {
         // pixels; implementations should render at origin + m_position.
         // `parentOpacity` is the already-composed (multiplied-together)
         // opacity of every ancestor - see setOpacity()'s doc comment for
-        // why multiply, not override. `scale` (Phase 17, DESIGN.md) is a
-        // per-axis multiplier accumulated from an ancestor `popin`/`gnome`
-        // window style ONLY - CCanvas is the one and only place that ever
-        // passes a non-{1,1} value in (see its own render()), since
-        // popin/gnome are scoped to a window's root, not a generic per-
-        // widget mechanism the way `slide` (styleOffset() below) is. Every
-        // widget below the root just passes it straight through unchanged
-        // - nothing here ever introduces its OWN new scale. Default
-        // recurses into children (in z-index paint order, see
-        // paintOrder() below) at their laid-out positions (scaled), passing
-        // this widget's own composed opacity AND the same scale down -
-        // right for containers; leaves override this instead and use the
-        // composed opacity to fade, and boxAt()'s own scale-aware box to
-        // draw, what they actually draw.
+        // why multiply, not override. `scale` (Phase 17/18, DESIGN.md) is
+        // a per-axis multiplier ACCUMULATED from every ancestor's own
+        // `popin`/`gnome` style, if any (see popinTransform() below) -
+        // generic per-widget, same as `parentOpacity`/`styleOffset()`,
+        // NOT a window-root-only special case (that was Phase 17's
+        // narrower first cut - see DESIGN.md for why it was widened).
+        // Default recurses into children (in z-index paint order, see
+        // paintOrder() below) at their laid-out positions (scaled and,
+        // if THIS widget itself has a popin/gnome style, further shrunk
+        // around its own center - see the childOrigin/childScale
+        // computation below), passing this widget's own composed opacity
+        // AND the accumulated scale down - right for containers; leaves
+        // override this instead and use the composed opacity to fade,
+        // and boxAt()'s own scale-aware box to draw, what they actually
+        // draw (which is why a leaf overriding this - CButtonWidget/
+        // CInputWidget - can just forward the origin/scale it itself
+        // received straight to `CWidget::render(...)` for its children:
+        // that call recomputes the exact same basePos/childOrigin/
+        // childScale below using `this` leaf's own m_position/
+        // styleOffset()/popinTransform(), identically to what its own
+        // boxAt() call used to draw itself).
         virtual void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) {
             if (!m_visible)
                 return;
-            const float opacity = composedOpacity(parentOpacity);
+            const float    opacity     = composedOpacity(parentOpacity);
+            const Vector2D basePos     = origin + (m_position + styleOffset()) * scale;
+            const auto     local       = popinTransform();
+            const Vector2D childOrigin = basePos + local.offset * scale;
+            const Vector2D childScale  = scale * local.scale;
             for (auto* child : paintOrder())
-                child->render(origin + (m_position + styleOffset()) * scale, opacity, scale);
+                child->render(childOrigin, opacity, childScale);
         }
 
         void addChild(PWidget child) {
@@ -351,10 +362,13 @@ namespace HyprLUI {
             if (!m_visible)
                 return nullptr;
 
-            const Vector2D absOrigin = origin + (m_position + styleOffset()) * scale;
-            auto           order     = paintOrder();
+            const Vector2D basePos     = origin + (m_position + styleOffset()) * scale;
+            const auto     local       = popinTransform();
+            const Vector2D childOrigin = basePos + local.offset * scale;
+            const Vector2D childScale  = scale * local.scale;
+            auto           order       = paintOrder();
             for (auto it = order.rbegin(); it != order.rend(); ++it) {
-                if (auto* hit = (*it)->hitTest(absOrigin, point, scale))
+                if (auto* hit = (*it)->hitTest(childOrigin, point, childScale))
                     return hit;
             }
 
@@ -805,15 +819,13 @@ namespace HyprLUI {
         // monitor geometry a plain widget doesn't have (only a window's
         // own canvas does) - "left" is the fixed default here instead,
         // for both widgets and window roots alike, for consistency. Only
-        // "slide" is handled HERE - "popin"/"gnome" (Phase 17, DESIGN.md)
-        // are valid `style` strings too (see LuaBridge.cpp's
-        // optStyleField()) but are scoped to a window's ROOT only, applied
-        // externally by CCanvas (its own render(), reading styleString()/
-        // visibilityProgress() below), not by this generic per-widget
-        // method - a non-"slide" style simply returns {0,0} here, same as
-        // no style at all. The distance slid is always this widget's own
-        // current size along that axis, same simplification the original
-        // CCanvas-only version of this had.
+        // "slide" is handled HERE - "popin"/"gnome" (Phase 17/18,
+        // DESIGN.md) are valid `style` strings too (see LuaBridge.cpp's
+        // optStyleField()) but produce a SCALE, not a translation, so
+        // they're computed by popinTransform() below instead - a non-
+        // "slide" style simply returns {0,0} here, same as no style at
+        // all. The distance slid is always this widget's own current
+        // size along that axis.
         Vector2D styleOffset() const {
             if (!m_visibilityAnim)
                 return {0, 0};
@@ -838,28 +850,75 @@ namespace HyprLUI {
             return magnitude * (1.0 - m_visibilityAnim->value());
         }
 
-        // Phase 17 (DESIGN.md) - raw read-back of this widget's currently-
-        // active visibility animation's `style` string and progress, for
-        // CCanvas to build its own `popin`/`gnome` scale+offset from (see
-        // Canvas.cpp's render()) - deliberately NOT interpreted here the
-        // way styleOffset() interprets "slide", since popin/gnome are
-        // root-only (CCanvas's own concern), not a generic per-widget
-        // capability. "" / 1.0-or-instant-visible-state if there's no
-        // active animation at all (enabled=false, or never animated),
-        // matching styleOffset()'s own "nothing set, do nothing" default.
-        std::string styleString() const {
-            return m_visibilityAnim ? m_visibilityAnim->getStyle() : std::string{};
-        }
-        float visibilityProgress() const {
-            return m_visibilityAnim ? m_visibilityAnim->value() : (m_visible ? 1.0f : 0.0f);
+        // This widget's OWN popin/gnome contribution - `scale` (1 = full
+        // size, per axis) and `offset` (keeps the shrink centered on this
+        // widget's own box). {1,1}/{0,0} (no-op) for "slide" or no style
+        // at all - see styleOffset() above for those instead.
+        struct SPopinTransform {
+            Vector2D scale{1, 1};
+            Vector2D offset{0, 0};
+        };
+
+        // Phase 17/18 (DESIGN.md) - generalized from Phase 17's original
+        // window-root-only version (which computed these exact formulas,
+        // just once, inside CCanvas's own render() for m_root only - see
+        // git history / DESIGN.md's Phase 18 entry for why it was
+        // widened): ANY widget with `style = "popin"`/`"popin N%"`/
+        // `"gnome"`/`"gnomed"` set (its own animationIn/animationOut
+        // override, or the global hyprlui.animation() config) now shrinks
+        // itself AND its whole subtree around its own center, exactly the
+        // same "no distinction between a widget and its window" principle
+        // `slide` (styleOffset() above) and the opacity fade both already
+        // follow - a window's root doing this IS the whole window
+        // shrinking, same as before, just no longer a special case CCanvas
+        // has to know about (see render()/hitTest() below for how a
+        // widget's own transform composes - multiplicatively - with
+        // whatever its ancestors already contributed, rather than
+        // replacing it: a widget nested inside an already-popin-ing
+        // ancestor shrinks further, relative to its own center within
+        // that already-shrunk space).
+        //
+        // Math mirrors Hyprland's own WindowAnimationController.cpp
+        // exactly (applyPopin()/applyGnomed()), re-derived directly in
+        // terms of progress rather than its own from/to interpolation
+        // shape: `popin`'s scale = minPerc + (1 - minPerc) * progress
+        // (uniform on both axes, minPerc from an optional trailing "N%",
+        // default 0); `gnome`'s scale = {1, progress} (X untouched, Y
+        // squashes to a horizontal line). Either way, offset = size/2 *
+        // (1 - scale) componentwise, keeping the shrink centered.
+        SPopinTransform popinTransform() const {
+            if (!m_visibilityAnim)
+                return {};
+            const std::string& style = m_visibilityAnim->getStyle();
+            Vector2D           scale{1, 1};
+            if (style == "gnome" || style == "gnomed") {
+                scale = {1.0, m_visibilityAnim->value()};
+            } else if (style == "popin" || style.starts_with("popin ")) {
+                double minPerc = 0.0;
+                if (const auto space = style.find(' '); space != std::string::npos) {
+                    const auto pct = style.substr(space + 1);
+                    try {
+                        minPerc = std::stod(pct.substr(0, pct.size() - 1)) / 100.0; // trailing '%' already validated by LuaBridge.cpp's optStyleField()
+                    } catch (...) {}
+                }
+                const double s = minPerc + (1.0 - minPerc) * m_visibilityAnim->value();
+                scale          = {s, s};
+            } else {
+                return {}; // "slide" or no style - {1,1}/{0,0}, not this method's concern
+            }
+            return {scale, m_size * 0.5 * (Vector2D{1.0, 1.0} - scale)};
         }
 
-        // `scale` (Phase 17) - see render()'s own doc comment for what
-        // this is and where it ever comes from (only ever non-{1,1} when
-        // CCanvas is rendering a `popin`/`gnome`-styled window's subtree -
-        // see its own render()).
+        // `scale` (Phase 17/18) - see render()'s own doc comment for what
+        // this is: the ACCUMULATED scale from every ancestor's own
+        // popinTransform(), NOT including this widget's own (that's
+        // applied here, on top, via popinTransform() below - a widget's
+        // own shrink affects its own drawn box exactly like it affects
+        // its children's).
         CBox boxAt(const Vector2D& origin, const Vector2D& scale = {1, 1}) const {
-            return {origin + (m_position + styleOffset()) * scale, m_size * scale};
+            const Vector2D basePos = origin + (m_position + styleOffset()) * scale;
+            const auto     local   = popinTransform();
+            return {basePos + local.offset * scale, m_size * scale * local.scale};
         }
 
         // This widget's own debug-overlay request (see SDebugSpec's doc

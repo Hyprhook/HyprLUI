@@ -1474,42 +1474,122 @@ local function hyprluiPopinTestWindow(name, style)
 end
 
 -- ALT + SHIFT + 8: toggle a `popin 40%` test window.
-hl.bind("ALT + SHIFT + 8", function()
-	if hyprluiPopinWindowOpen then
-		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_POPIN_WINDOW)
+-- hl.bind("ALT + SHIFT + 8", function()
+-- 	if hyprluiPopinWindowOpen then
+-- 		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_POPIN_WINDOW)
+-- 		if not ok then
+-- 			hyprluiWarn("hyprlui.remove_canvas", err)
+-- 		end
+-- 		hyprluiPopinWindowOpen = false
+-- 		return
+-- 	end
+--
+-- 	local ok, err = pcall(hyprluiPopinTestWindow, HYPRLUI_POPIN_WINDOW, "popin 40%")
+-- 	if not ok then
+-- 		hyprluiWarn("hyprlui.window", err)
+-- 		return
+-- 	end
+-- 	hyprluiPopinWindowOpen = true
+-- end, { description = "HyprLUI: toggle the popin test window" })
+--
+-- -- ALT + SHIFT + 9: toggle the same window shape, using `gnome` instead.
+-- hl.bind("ALT + SHIFT + 9", function()
+-- 	if hyprluiPopinWindowOpen then
+-- 		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_POPIN_WINDOW)
+-- 		if not ok then
+-- 			hyprluiWarn("hyprlui.remove_canvas", err)
+-- 		end
+-- 		hyprluiPopinWindowOpen = false
+-- 		return
+-- 	end
+--
+-- 	local ok, err = pcall(hyprluiPopinTestWindow, HYPRLUI_POPIN_WINDOW, "gnome")
+-- 	if not ok then
+-- 		hyprluiWarn("hyprlui.window", err)
+-- 		return
+-- 	end
+-- 	hyprluiPopinWindowOpen = true
+-- end, { description = "HyprLUI: toggle the gnome test window" })
+
+--------------------------------------------------
+---- HYPRLUI WIDGET-LEVEL POPIN TEST (Phase 18) ----
+--------------------------------------------------
+-- Exercises `popin`/`gnome` GENERALIZED to a non-root widget (DESIGN.md
+-- Phase 18 - Phase 17 originally scoped these to a window's root only).
+-- The window itself (and "bg") has NO style at all and stays put/instant
+-- - only "badge" (a small Box nested inside "content") has its own
+-- `popin` override, toggled independently via set_widget_visible(), so
+-- it pops in/out on its own without the window opening/closing or
+-- sliding/shrinking itself.
+local HYPRLUI_WIDGET_POPIN_WINDOW = "hyprlui_widget_popin_test"
+local hyprluiWidgetPopinWindowOpen = false
+local hyprluiWidgetPopinBadgeVisible = true
+
+-- ALT + SHIFT + 0: toggle the widget-level popin test window.
+hl.bind("ALT + SHIFT + 0", function()
+	if hyprluiWidgetPopinWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_WIDGET_POPIN_WINDOW)
 		if not ok then
 			hyprluiWarn("hyprlui.remove_canvas", err)
 		end
-		hyprluiPopinWindowOpen = false
+		hyprluiWidgetPopinWindowOpen = false
 		return
 	end
 
-	local ok, err = pcall(hyprluiPopinTestWindow, HYPRLUI_POPIN_WINDOW, "popin 40%")
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = HYPRLUI_WIDGET_POPIN_WINDOW,
+			x = 900,
+			y = 550,
+			hl.plugin.hyprlui.Stack({
+				id = "root",
+				hl.plugin.hyprlui.Box({ id = "bg", w = 220, h = 90, color = 0xff223322, rounding = 8 }),
+				hl.plugin.hyprlui.Column({
+					id = "content",
+					x = 12,
+					y = 12,
+					gap = 6,
+					hl.plugin.hyprlui.Text({ id = "title", text = "ALT+SHIFT+= toggles the badge", size = 13 }),
+					hl.plugin.hyprlui.Box({
+						id = "badge",
+						x = 0,
+						y = 0,
+						w = 60,
+						h = 24,
+						color = 0xff33aa55,
+						rounding = 12,
+						animationIn = { speed = 4, bezier = "default", style = "popin 20%" },
+						animationOut = { speed = 4, bezier = "default", style = "popin 20%" },
+					}),
+				}),
+			}),
+		})
+	end)
 	if not ok then
 		hyprluiWarn("hyprlui.window", err)
 		return
 	end
-	hyprluiPopinWindowOpen = true
-end, { description = "HyprLUI: toggle the popin test window" })
+	hyprluiWidgetPopinWindowOpen = true
+	hyprluiWidgetPopinBadgeVisible = true
+end, { description = "HyprLUI: toggle the widget-level popin test window" })
 
--- ALT + SHIFT + 9: toggle the same window shape, using `gnome` instead.
+-- ALT + SHIFT + =: toggle just the "badge" widget's visibility - the
+-- window itself and "bg" are untouched, only "badge" pops in/out.
 hl.bind("ALT + SHIFT + 9", function()
-	if hyprluiPopinWindowOpen then
-		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_POPIN_WINDOW)
-		if not ok then
-			hyprluiWarn("hyprlui.remove_canvas", err)
-		end
-		hyprluiPopinWindowOpen = false
+	if not hyprluiWidgetPopinWindowOpen then
 		return
 	end
-
-	local ok, err = pcall(hyprluiPopinTestWindow, HYPRLUI_POPIN_WINDOW, "gnome")
+	hyprluiWidgetPopinBadgeVisible = not hyprluiWidgetPopinBadgeVisible
+	local ok, err = pcall(
+		hl.plugin.hyprlui.set_widget_visible,
+		HYPRLUI_WIDGET_POPIN_WINDOW,
+		"badge",
+		hyprluiWidgetPopinBadgeVisible
+	)
 	if not ok then
-		hyprluiWarn("hyprlui.window", err)
-		return
+		hyprluiWarn("hyprlui.set_widget_visible", err)
 	end
-	hyprluiPopinWindowOpen = true
-end, { description = "HyprLUI: toggle the gnome test window" })
+end, { description = "HyprLUI: toggle just the popin badge widget" })
 
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required

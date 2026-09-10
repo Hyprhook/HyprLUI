@@ -173,25 +173,13 @@ namespace HyprLUI {
         // accessor returns this same space, no per-monitor transform
         // needed here unlike rendering's toMonitorLocal()).
         //
-        // `m_popinOffset`/`m_popinScale` (Phase 17) - InputHook.cpp calls
-        // this independently of render() (on pointer move/click, not once
-        // per frame), so it needs the CURRENT popin/gnome transform cached
-        // from the last render() call, same "redo it every frame, one-
-        // frame-stale is fine" tolerance this codebase already accepts
-        // elsewhere - without this, clicking a window mid-popin/gnome
-        // would hit-test against its full, unscaled box instead of where
-        // it's actually, visibly drawn right now (same "click where it
-        // visually is" precedent `slide`'s own boxAt()-based hit-testing
-        // already set). `slide` needs no such handling here - it's
-        // applied INTERNALLY by root's own hitTest() already (see
-        // CWidget::styleOffset()), so m_popinScale stays {1,1} in that
-        // case and this falls through to the plain, unmodified call.
+        // No popin/gnome-specific handling needed here (unlike Phase 17's
+        // first cut) - root's own popinTransform() (Widget.hpp, Phase 18)
+        // is applied INTERNALLY by its own hitTest() now, same as `slide`
+        // already was, since a window's root is just an ordinary widget
+        // as far as this is concerned.
         CWidget* hitTest(const Vector2D& pt) const {
-            if (!m_root || !m_root->visible())
-                return nullptr;
-            if (m_popinScale != Vector2D{1, 1})
-                return m_root->hitTest(m_position + m_popinOffset, pt, m_popinScale);
-            return m_root->hitTest(m_position, pt);
+            return (m_root && m_root->visible()) ? m_root->hitTest(m_position, pt) : nullptr;
         }
 
         // Creation-order stamp, set once by CUIManager::createCanvas() -
@@ -398,12 +386,6 @@ namespace HyprLUI {
         std::function<void(const Vector2D&)> m_onSizeChanged;
         SEdgeInsets                          m_debugOverflow; // how far the debug overlay currently draws beyond box() on each side - see fullDamageBox()
         Vector2D m_styleOffset; // Phase 16 - m_root->styleOffset() (slide only), cached here each render() frame for fullDamageBox() to read; see render()'s own doc comment
-        Vector2D m_popinOffset{
-            0,
-            0}; // Phase 17 - this frame's popin/gnome offset (root-only; {0,0} for any other style), cached for hitTest() to use between render() calls - see render()'s own doc comment for the actual math
-        Vector2D m_popinScale{
-            1,
-            1}; // Phase 17 - this frame's popin/gnome scale (root-only; {1,1} for any other style, including slide) - see hitTest()'s own doc comment for why it's cached rather than only computed inline
     };
 
     using PCanvas = std::shared_ptr<CCanvas>;

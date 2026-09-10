@@ -2572,6 +2572,85 @@ piece (raw-keysym limitation).
       lint are clean; needs live confirmation (`ALT+SHIFT+8` popin,
       `ALT+SHIFT+9` gnome, `hyprlandd.lua`).
 
+- [x] **Phase 18** - Generalized `popin`/`gnome` from Phase 17's window-
+      root-only scope to ANY widget, explicitly requested as its own
+      phase once Phase 17 shipped and worked - "we decided against it
+      being widget wide [in Phase 17] - is that still open" -> "make it
+      the next phase."
+    - **Turned out to be a net simplification, not just an extension.**
+      Once each widget computes its OWN popin/gnome scale+offset the same
+      way `styleOffset()` already handled `slide` per-widget, and
+      composes it MULTIPLICATIVELY with whatever `scale` it received from
+      its ancestors, `CCanvas` no longer needs ANY popin/gnome-specific
+      code at all - a window's root is just an ordinary widget again,
+      exactly like it already was for `slide` and opacity. Removed
+      entirely: `CCanvas::m_popinOffset`/`m_popinScale`, the ~20-line
+      style-parsing block Phase 17 added to `CCanvas::render()`, and the
+      scale-aware branch Phase 17 added to `CCanvas::hitTest()` - both
+      reverted to their exact pre-Phase-17 one-line forms
+      (`m_root->render(m_position, 1.0F)` /
+      `m_root->hitTest(m_position, pt)`). `CButtonWidget`/`CInputWidget`
+      needed ZERO further changes - their existing Phase 17
+      `CWidget::render(origin, parentOpacity, scale)` delegation for
+      children already recomputes the right transform generically, since
+      it re-enters the (now-generalized) base class logic using `this`
+      leaf's own `m_position`/`styleOffset()`/`popinTransform()`.
+    - **New `CWidget::popinTransform()`** (Widget.hpp, returns
+      `{scale, offset}`) - the exact same formulas Phase 17 had inline in
+      `Canvas.cpp`, moved onto `CWidget` and made relative to `this`
+      widget instead of `m_root` specifically. `styleOffset()` (slide)
+      and `popinTransform()` (popin/gnome) stay two separate methods -
+      slide produces a translation, popin/gnome produce a scale (plus a
+      centering translation derived FROM that scale), different enough
+      shapes not to unify into one.
+    - **Composition, not replacement**: `render()`/`hitTest()`'s default
+      implementations now compute `childOrigin = basePos + local.offset *
+      scale` and `childScale = scale * local.scale` (componentwise) -
+      `scale` here is what this widget ITSELF received from its
+      ancestors; `local` is what THIS widget's own popinTransform()
+      contributes. A widget nested inside an already-shrinking ancestor
+      shrinks further, relative to its own center within whatever space
+      the ancestor's shrink already left it - matches real CSS nested-
+      transform composition, not something specially guarded against.
+      `boxAt()` applies the SAME widget's own local transform to its own
+      drawn box too (`m_size * scale * local.scale`), so a widget with
+      its own popin/gnome style shrinks itself exactly like it shrinks
+      its children - symmetric, no special leaf-vs-container distinction.
+    - **Damage-box reasoning still holds, unchanged**: since every
+      widget's own popin/gnome scale is always <=1 and its offset always
+      keeps the shrink centered WITHIN that widget's own pre-shrink box,
+      this holds recursively at every nesting level - the whole tree's
+      rendered extent, no matter how many widgets at any depth have their
+      own popin/gnome style, is still always bounded by the root's own
+      real (never-shrunk) layout box. `CCanvas::fullDamageBox()` needed
+      no changes for this phase, same as Phase 17.
+    - **Real build-hygiene gap found and fixed mid-phase, unrelated to
+      the design work itself**: this repo's `Makefile` briefly used a
+      per-file `%.o: %.cpp` rule with no header-dependency tracking (no
+      `-MMD`/`.d` files, no explicit header prerequisites) - editing ONLY
+      `Widget.hpp` (as this phase's core change did) left `Canvas.o`
+      considered "up to date" by `make` even though it still called
+      methods (`styleString()`/`visibilityProgress()`) this phase had
+      just removed, silently linking a stale, pre-Phase-18 `Canvas.o`
+      into a `.so` that otherwise looked like it built successfully
+      (`EXIT_CODE=0`, no errors). Caught by manually deleting `.o` files
+      and forcing a full rebuild rather than trusting a bare `make`'s
+      exit code alone. The `Makefile` was separately reverted back to a
+      single always-full-rebuild `g++` invocation (no persistent `.o`
+      files at all) partway through this same phase, which structurally
+      closes this specific hazard going forward - but the underlying
+      lesson stands for any future `Makefile` state: a header-only change
+      needs either a dependency-tracked build or a forced clean rebuild,
+      never a bare incremental `make`.
+    - Widget-level demo added (`ALT+SHIFT+0` open/close,
+      `ALT+SHIFT+=` toggles just a nested "badge" Box's own `popin`
+      independently of the window itself, `hyprlandd.lua`) specifically
+      to exercise the NEW capability this phase adds, distinct from
+      Phase 17's window-root-only demos (`ALT+SHIFT+8`/`9`, still valid -
+      a window's root can still use `popin`/`gnome`, same as any widget
+      now). Not tested live in a running compositor this session -
+      build/`nm`/lint are clean; needs live confirmation.
+
 ## Open questions
 
 - **Canvas damage tracking trusts `m_root->size()` to bound everything

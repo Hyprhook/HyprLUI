@@ -214,7 +214,7 @@ namespace HyprLUI::Lua {
             return "default";
         }
 
-        // Phase 16 follow-up (DESIGN.md): the `style` field shared by
+        // Phase 16/17/18 (DESIGN.md): the `style` field shared by
         // hyprlui.animation() and animationIn/animationOut (below) - reuses
         // Hyprland's OWN windowsIn/windowsOut style syntax
         // (WindowAnimationController.cpp): "slide" or "slide
@@ -224,20 +224,16 @@ namespace HyprLUI::Lua {
         // falls back to "left" instead, for both widgets and window roots
         // alike); "popin" or "popin N%" (N is the minimum size percentage
         // to shrink to, default 0 if omitted, matching Hyprland's own
-        // default - see Canvas.cpp's render()); "gnome"/"gnomed" (either
-        // spelling, matching Hyprland accepting both). Popin/gnome (Phase
-        // 17, DESIGN.md) are scoped to a window's ROOT widget only, unlike
-        // `slide` which works on any widget - see CCanvas::render()'s own
-        // doc comment for why (they need a genuine scale-through-render
-        // capability that's only implemented at the canvas level, not
-        // CWidget::styleOffset()'s generic per-widget path) - accepted
-        // here regardless of which widget this is, since buildWidget()
-        // has no way to know yet whether IT'S the eventual root; a non-
-        // root widget with `style = "popin"` set just gets no visual
-        // effect (still fades opacity normally), same as any config the
-        // engine doesn't happen to read. Returns "" (falsy, "no style") if
-        // the field is absent - matches hyprlui.animation()'s own ""
-        // bezier-or-spring absent-field convention.
+        // default - see CWidget::popinTransform()); "gnome"/"gnomed"
+        // (either spelling, matching Hyprland accepting both). All three
+        // apply to ANY widget, not just a window's root (Phase 18 widened
+        // popin/gnome from Phase 17's original window-root-only cut - see
+        // DESIGN.md) - a widget's own popin/gnome shrinks/squashes itself
+        // AND its whole subtree together as one rigid unit, composing
+        // multiplicatively with whatever scale its own ancestors already
+        // contributed. Returns "" (falsy, "no style") if the field is
+        // absent - matches hyprlui.animation()'s own "" bezier-or-spring
+        // absent-field convention.
         std::string optStyleField(lua_State* L, int idx, const std::string& errPrefix) {
             const auto style = optFieldString(L, idx, "style", "");
             if (style.empty() || style == "slide" || style == "popin" || style == "gnome" || style == "gnomed")

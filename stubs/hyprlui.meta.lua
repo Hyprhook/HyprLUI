@@ -103,18 +103,18 @@
 -- defined via hl.curve()/hl.curve({type="spring", ...})) - give at most
 -- one; `bezier` wins if somehow both are given (same precedence as
 -- hl.animation() itself), and it defaults to "default" if neither is
--- given at all. `style` (Phase 16/17) is Hyprland's own windowsIn/
+-- given at all. `style` (Phase 16/17/18) is Hyprland's own windowsIn/
 -- windowsOut style string syntax - "slide" or "slide left|right|top|
 -- bottom" (direction defaults to "left" if omitted); "popin" or "popin
 -- N%" (min size percentage, default 0); "gnome"/"gnomed" - layered ON TOP
 -- of the opacity fade above (same 0..1 progress drives all of them, not
--- independently timed). `slide` applies a position offset to whichever
--- widget this leaf ends up governing (any widget, or a window's own
--- root, same thing - see HyprLUI.AnimationOverride below); `popin`/
--- `gnome` scale the whole subtree and are scoped to a window's ROOT
--- widget only - setting either on a non-root widget has no visual effect
--- (only opacity still fades), since Hyprland itself has no sub-window
--- element popin/gnome concept to generalize.
+-- independently timed). ALL THREE apply to ANY widget this leaf ends up
+-- governing, not just a window's own root - a window's root sliding/
+-- shrinking IS the whole window sliding/shrinking. `popin`/`gnome` scale
+-- the whole subtree (children included) as one rigid unit; nested styles
+-- compose multiplicatively (a widget with its own `popin` inside an
+-- already-`popin`-ing ancestor shrinks further, relative to its own
+-- center within whatever space the ancestor's shrink left it).
 ---@class HyprLUI.AnimationOpts
 ---@field leaf "in"|"out"
 ---@field enabled? boolean
@@ -124,16 +124,15 @@
 ---@field style? string
 
 -- A widget's own `animationIn`/`animationOut` field (Phase 13 follow-up,
--- `style` added Phase 16/17) - same shape as HyprLUI.AnimationOpts minus
--- `leaf` (implied by which field this is), overriding hyprlui.animation()'s
--- global config for just this ONE widget. Self-contained, not a partial
--- merge with the global config - `speed` is only required unless this
--- explicitly sets `enabled = false` (which forces this widget's toggle to
--- stay instant even if the global leaf is enabled). `style = "slide..."`
--- works identically on a window's own root widget as on any other widget
--- - a window's root sliding IS the whole window sliding. `style =
--- "popin..."`/`"gnome"` only has a visual effect when set on a window's
--- own root.
+-- `style` added Phase 16/17/18) - same shape as HyprLUI.AnimationOpts
+-- minus `leaf` (implied by which field this is), overriding
+-- hyprlui.animation()'s global config for just this ONE widget. Self-
+-- contained, not a partial merge with the global config - `speed` is only
+-- required unless this explicitly sets `enabled = false` (which forces
+-- this widget's toggle to stay instant even if the global leaf is
+-- enabled). Works identically on a window's own root widget as on any
+-- other widget for ALL of `slide`/`popin`/`gnome` - a window's root
+-- sliding/shrinking IS the whole window sliding/shrinking.
 ---@class HyprLUI.AnimationOverride
 ---@field enabled? boolean
 ---@field speed? number

@@ -339,7 +339,7 @@
 //     to define a NEW spring itself, only reference one Hyprland (or the
 //     user's config) already registered.
 //
-//     `style` (Phase 16/17, DESIGN.md) - a position-slide, or a scale
+//     `style` (Phase 16/17/18, DESIGN.md) - a position-slide, or a scale
 //     (shrink-and-center / squash-to-a-line), layered on TOP of the
 //     opacity fade above, reusing Hyprland's OWN windowsIn/windowsOut
 //     style string syntax (WindowAnimationController.cpp): "slide" or
@@ -352,25 +352,20 @@
 //     or-`spring` are shared by whichever style is set - they're not
 //     independently timed per style.
 //
-//     `slide` applies to ANY widget, not just a window's root - same "no
+//     ALL THREE apply to ANY widget, not just a window's root - same "no
 //     distinction between a widget and its window" principle as
-//     everything else here (a window's root sliding IS the whole window
-//     sliding, exactly like its opacity fading already worked). The slide
-//     distance is always this widget's own current size along the slide
-//     axis.
-//
-//     `popin`/`gnome` are scoped to a window's ROOT widget only (Phase 17)
-//     - unlike `slide`, setting either on a non-root widget has no visual
-//     effect at all (only its opacity fade still applies) - this
-//     deliberately mirrors Hyprland itself, which has no sub-window
-//     element popin/gnome concept to generalize in the first place (see
-//     DESIGN.md's Phase 17 entry). `popin` shrinks the whole window
-//     toward its own center (uniformly on both axes) between `N%` of its
-//     final size and 100%; `gnome` squashes it to a horizontal line at
-//     its own vertical center (Y only - width stays full) before growing
-//     back to full height. Either way, EVERYTHING under the root visually
-//     scales together as a rigid unit (children included) - not just the
-//     root's own box.
+//     everything else here (a window's root sliding/shrinking IS the
+//     whole window sliding/shrinking, exactly like its opacity fading
+//     already worked). Nested styles compose multiplicatively - a widget
+//     with its own `popin` inside an ancestor that's ALSO `popin`-ing
+//     shrinks further, relative to its own center within whatever space
+//     the ancestor's shrink already left it. `slide`'s distance is always
+//     the sliding widget's own current size along that axis. `popin`
+//     shrinks a widget (and its whole subtree, as one rigid unit) toward
+//     its own center (uniformly on both axes) between `N%` of its final
+//     size and 100%; `gnome` squashes it to a horizontal line at its own
+//     vertical center (Y only - width stays full) before growing back to
+//     full height.
 //
 //     The SAME 0..1 progress already driving the opacity fade also
 //     drives whichever style is set - they are not independently timed;
