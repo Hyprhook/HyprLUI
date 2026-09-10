@@ -214,16 +214,52 @@ namespace HyprLUI::Lua {
             return "default";
         }
 
-        // Phase 13 follow-up: a widget's own `animationIn`/`animationOut`
-        // field (see buildWidget()'s common tail) - a per-widget override
-        // of hyprlui.animation()'s global "in"/"out" config, self-
-        // contained like the global one's own table shape (leaf implied
-        // by which field this is), not a partial merge with it. Returns
-        // nullptr if the field isn't present at all (the common case -
-        // "use the global config for this widget"). `speed` is only
-        // required when the table doesn't explicitly set `enabled =
-        // false` - same conditional-requirement shape as hl.animation()/
-        // hyprlui.animation() themselves.
+        // Phase 16 follow-up (DESIGN.md): the `style` field shared by
+        // hyprlui.animation() and animationIn/animationOut (below) - reuses
+        // Hyprland's OWN windowsIn/windowsOut style syntax
+        // (WindowAnimationController.cpp) - "slide" or "slide
+        // left|right|top|bottom" - MINUS its "no direction -> auto-pick
+        // nearest monitor edge" behavior (needs monitor geometry a plain
+        // widget doesn't have; CWidget::styleOffset(), Widget.hpp, always
+        // falls back to "left" instead, for both widgets and window roots
+        // alike). Only `slide` is implemented so far - `popin`/`gnome`
+        // (Hyprland's other two styles) need a genuine scale-through-
+        // render capability this codebase doesn't have yet (confirmed via
+        // gfx.hpp/Render.cpp: drawRect()/drawTexture() only take an
+        // absolute CBox, no transform concept at all) - rejected here
+        // rather than silently accepted-but-inert. Returns "" (falsy, "no
+        // style") if the field is absent - matches hyprlui.animation()'s
+        // own "" bezier-or-spring absent-field convention.
+        std::string optStyleField(lua_State* L, int idx, const std::string& errPrefix) {
+            const auto style = optFieldString(L, idx, "style", "");
+            if (style.empty() || style == "slide")
+                return style;
+            if (style.starts_with("slide ")) {
+                const auto dir = style.substr(6);
+                if (dir == "left" || dir == "right" || dir == "top" || dir == "bottom")
+                    return style;
+            }
+            luaL_error(L, "%s: field 'style' must be \"slide\" or \"slide left|right|top|bottom\", got \"%s\" (popin/gnome aren't implemented yet)", errPrefix.c_str(),
+                       style.c_str());
+            return {}; // unreachable - silences -Wreturn-type
+        }
+
+        // Phase 13 follow-up (`style` added Phase 16, see optStyleField()
+        // above): a widget's own `animationIn`/`animationOut` field (see
+        // buildWidget()'s common tail) - a per-widget override of
+        // hyprlui.animation()'s global "in"/"out" config, self-contained
+        // like the global one's own table shape (leaf implied by which
+        // field this is), not a partial merge with it. Returns nullptr if
+        // the field isn't present at all (the common case - "use the
+        // global config for this widget"). `speed` is only required when
+        // the table doesn't explicitly set `enabled = false` - same
+        // conditional-requirement shape as hl.animation()/
+        // hyprlui.animation() themselves. Applies identically whether this
+        // widget is an ordinary widget or happens to be a window's own
+        // root (CCanvas::setVisible() delegates entirely to the root - see
+        // its own doc comment) - `style`'s position-slide effect
+        // (CWidget::styleOffset()) is therefore available on ANY widget,
+        // not just windows, same as opacity fade already was.
         SP<Hyprutils::Animation::SAnimationPropertyConfig> optAnimationOverrideField(lua_State* L, int idx, const char* key, const char* fnName) {
             lua_getfield(L, idx, key);
             if (lua_isnil(L, -1)) {
@@ -244,7 +280,8 @@ namespace HyprLUI::Lua {
                 if (speed <= 0)
                     luaL_error(L, "%s: field '%s': speed must be greater than 0", fnName, key);
                 const auto curve = resolveCurveField(L, tblIdx, std::string(fnName) + ": field '" + key + "'");
-                cfg              = makeAnimationConfig(true, static_cast<float>(speed), curve);
+                const auto style = optStyleField(L, tblIdx, std::string(fnName) + ": field '" + key + "'");
+                cfg              = makeAnimationConfig(true, static_cast<float>(speed), curve, style);
             }
 
             lua_pop(L, 1); // the animationIn/animationOut table itself
@@ -1498,14 +1535,18 @@ namespace HyprLUI::Lua {
         }
 
         // Phase 13 (DESIGN.md) - hyprlui.animation({leaf="in"|"out",
-        // enabled=true, speed, bezier}). Deliberately only "in"/"out" -
-        // not hooked into Hyprland's own animation tree at all (verified:
-        // no public API to register a new leaf node there - see
+        // enabled=true, speed, bezier, style}). Deliberately only "in"/
+        // "out" - not hooked into Hyprland's own animation tree at all
+        // (verified: no public API to register a new leaf node there - see
         // CWidgetAnimations' doc comment in Widget.hpp), so this is a
         // self-contained, separate config surface, shaped to LOOK like
         // hl.animation()'s own table call for familiarity, but scoped to
         // exactly the two leaves HyprLUI actually supports. `speed` is in
-        // deciseconds, same unit as hl.animation().
+        // deciseconds, same unit as hl.animation(). `style` (Phase 16
+        // follow-up) is the SAME field/syntax animationIn/animationOut
+        // accept per-widget (see optStyleField()'s own doc comment) -
+        // this is the GLOBAL default every widget/window uses unless it
+        // sets its own animationIn/animationOut override.
         int luaAnimation(lua_State* L) {
             luaL_checktype(L, 1, LUA_TTABLE);
 
@@ -1531,8 +1572,9 @@ namespace HyprLUI::Lua {
                 return luaL_error(L, "hyprlui.animation(\"%s\"): speed must be greater than 0", leaf.c_str());
 
             const auto curve = resolveCurveField(L, 1, "hyprlui.animation(\"" + leaf + "\")");
+            const auto style = optStyleField(L, 1, "hyprlui.animation(\"" + leaf + "\")");
 
-            CWidgetAnimations::get().configure(kind, true, static_cast<float>(speed), curve);
+            CWidgetAnimations::get().configure(kind, true, static_cast<float>(speed), curve, style);
             return 0;
         }
 

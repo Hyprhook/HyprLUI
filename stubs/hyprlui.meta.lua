@@ -103,26 +103,37 @@
 -- defined via hl.curve()/hl.curve({type="spring", ...})) - give at most
 -- one; `bezier` wins if somehow both are given (same precedence as
 -- hl.animation() itself), and it defaults to "default" if neither is
--- given at all.
+-- given at all. `style` (Phase 16 follow-up) is Hyprland's own
+-- windowsIn/windowsOut style string syntax - "slide" or "slide
+-- left|right|top|bottom" (direction defaults to "left" if omitted; only
+-- "slide" is implemented, "popin"/"gnome" are rejected) - layered ON TOP
+-- of the opacity fade above (same 0..1 progress drives both, not
+-- independently timed), applying a position offset to whichever widget
+-- this leaf ends up governing (any widget, or a window's own root, same
+-- thing - see HyprLUI.AnimationOverride below).
 ---@class HyprLUI.AnimationOpts
 ---@field leaf "in"|"out"
 ---@field enabled? boolean
 ---@field speed? number
 ---@field bezier? string
 ---@field spring? string
+---@field style? string
 
--- A widget's own `animationIn`/`animationOut` field (Phase 13 follow-up) -
--- same shape as HyprLUI.AnimationOpts minus `leaf` (implied by which
--- field this is), overriding hyprlui.animation()'s global config for just
--- this ONE widget. Self-contained, not a partial merge with the global
--- config - `speed` is only required unless this explicitly sets
--- `enabled = false` (which forces this widget's toggle to stay instant
--- even if the global leaf is enabled).
+-- A widget's own `animationIn`/`animationOut` field (Phase 13 follow-up,
+-- `style` added Phase 16) - same shape as HyprLUI.AnimationOpts minus
+-- `leaf` (implied by which field this is), overriding hyprlui.animation()'s
+-- global config for just this ONE widget. Self-contained, not a partial
+-- merge with the global config - `speed` is only required unless this
+-- explicitly sets `enabled = false` (which forces this widget's toggle to
+-- stay instant even if the global leaf is enabled). Works identically on
+-- a window's own root widget as on any other widget - a window's root
+-- sliding IS the whole window sliding.
 ---@class HyprLUI.AnimationOverride
 ---@field enabled? boolean
 ---@field speed? number
 ---@field bezier? string
 ---@field spring? string
+---@field style? string
 
 -- Either a single number (applied to all four sides) or a table with any
 -- subset of sides given (an omitted side defaults to 0, NOT to whatever
@@ -365,6 +376,11 @@
 -- Without `anchor`: x/y are a raw global (compositor-space) position.
 -- With `anchor`: x/y are reinterpreted as an offset from that point on
 -- the target monitor's usable box (positive always pushes inward).
+--
+-- A window's own open/close slide (Phase 16) is configured via the ROOT
+-- widget's `animationIn`/`animationOut.style` field (HyprLUI.
+-- AnimationOverride), not a field here - a window IS its root widget as
+-- far as visibility/animation goes.
 ---@class HyprLUI.WindowSpec
 ---@field name string
 ---@field x? number

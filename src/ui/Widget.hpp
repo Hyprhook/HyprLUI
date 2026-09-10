@@ -67,19 +67,30 @@ namespace HyprLUI {
             return instance;
         }
 
-        // hyprlui.animation({leaf="in"|"out", enabled, speed, bezier}) -
-        // `speed` is in DECISECONDS (tenths of a second), matching
-        // Hyprland's own hl.animation()'s unit exactly, so a user's
-        // existing mental model transfers directly. Disabled (the
+        // hyprlui.animation({leaf="in"|"out", enabled, speed, bezier,
+        // style}) - `speed` is in DECISECONDS (tenths of a second),
+        // matching Hyprland's own hl.animation()'s unit exactly, so a
+        // user's existing mental model transfers directly. Disabled (the
         // default, until configure() is ever called) means
         // setVisible() stays exactly as instant as it always was - this
         // is purely opt-in, no existing behavior changes unless a config
-        // author explicitly turns it on.
-        void configure(EKind kind, bool enabled, float speedDeciseconds, const std::string& bezier) {
+        // author explicitly turns it on. `style` (Phase 16 follow-up,
+        // DESIGN.md) is Hyprland's own windowsIn/windowsOut style syntax
+        // ("slide", "slide left|right|top|bottom" - popin/gnome not
+        // implemented yet) stored straight into `internalStyle`, a field
+        // Hyprutils' SAnimationPropertyConfig already has (unrelated to
+        // the tree-structured CAnimationTreeController - see this class's
+        // own header comment) - see CWidget::styleOffset() for how it's
+        // actually turned into a position offset, applied uniformly to
+        // ANY widget (or a window's root, same thing), not just windows,
+        // matching this whole mechanism's existing "no distinction
+        // between a widget and its window" principle.
+        void configure(EKind kind, bool enabled, float speedDeciseconds, const std::string& bezier, const std::string& style = "") {
             auto& cfg            = slot(kind);
             cfg->internalEnabled = enabled ? 1 : 0;
             cfg->internalSpeed   = speedDeciseconds;
             cfg->internalBezier  = bezier;
+            cfg->internalStyle   = style;
         }
 
         bool enabled(EKind kind) const {
@@ -121,11 +132,12 @@ namespace HyprLUI {
     // Lua table and never mutated in place afterward - there's no live-
     // reconfigure API for one specific widget's own override the way
     // hyprlui.animation() live-reconfigures the global one.
-    inline SP<Hyprutils::Animation::SAnimationPropertyConfig> makeAnimationConfig(bool enabled, float speedDeciseconds, const std::string& bezier) {
+    inline SP<Hyprutils::Animation::SAnimationPropertyConfig> makeAnimationConfig(bool enabled, float speedDeciseconds, const std::string& bezier, const std::string& style = "") {
         auto cfg             = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
         cfg->internalEnabled = enabled ? 1 : 0;
         cfg->internalSpeed   = speedDeciseconds;
         cfg->internalBezier  = bezier;
+        cfg->internalStyle   = style;
         cfg->pValues         = cfg;
         return cfg;
     }
@@ -276,7 +288,7 @@ namespace HyprLUI {
                 return;
             const float opacity = composedOpacity(parentOpacity);
             for (auto* child : paintOrder())
-                child->render(origin + m_position, opacity);
+                child->render(origin + m_position + styleOffset(), opacity);
         }
 
         void addChild(PWidget child) {
@@ -330,7 +342,7 @@ namespace HyprLUI {
             if (!m_visible)
                 return nullptr;
 
-            const Vector2D absOrigin = origin + m_position;
+            const Vector2D absOrigin = origin + m_position + styleOffset();
             auto           order     = paintOrder();
             for (auto it = order.rbegin(); it != order.rend(); ++it) {
                 if (auto* hit = (*it)->hitTest(absOrigin, point))
@@ -758,8 +770,62 @@ namespace HyprLUI {
             return m_zIndex;
         }
 
+        // Phase 16 follow-up (DESIGN.md) - `style`'s position offset, if
+        // this widget's currently-active visibility animation (its own
+        // override if it has one, else the global config - see
+        // setVisible()) has one set (CWidgetAnimations::configure()'s
+        // `style` param / a widget's own animationIn/animationOut
+        // `style` field). Reuses m_visibilityAnim directly rather than a
+        // second, separately-configured animated value - opacity and
+        // slide progress are literally the same 0..1 goal, matching how
+        // Hyprland's own windowsIn/windowsOut couples alpha and position
+        // under ONE animation (WindowAnimationController.cpp's
+        // animateIn()/animateOut() always fades alpha 0<->1 regardless of
+        // style; this mirrors that exactly - `style` on a widget with
+        // `enabled = false` does nothing, same as opacity doesn't).
+        // `getStyle()` reads back internalStyle straight off whatever
+        // config m_visibilityAnim is CURRENTLY attached to (see
+        // Hyprutils::Animation::CBaseAnimatedVariable::getStyle()) - no
+        // separate tracking needed here for which override/global config
+        // is "active".
+        //
+        // Syntax matches Hyprland's own windowsIn/windowsOut style string
+        // (WindowAnimationController.cpp) - "slide" or "slide
+        // left|right|top|bottom" - MINUS its "no direction given ->
+        // auto-pick the nearest monitor edge" behavior, which needs
+        // monitor geometry a plain widget doesn't have (only a window's
+        // own canvas does) - "left" is the fixed default here instead,
+        // for both widgets and window roots alike, for consistency. Only
+        // "slide" is implemented (popin/gnome are rejected at parse time,
+        // see LuaBridge.cpp's optStyleField()) - the distance slid is
+        // always this widget's own current size along that axis, same
+        // simplification the original CCanvas-only version of this had.
+        Vector2D styleOffset() const {
+            if (!m_visibilityAnim)
+                return {0, 0};
+            const std::string& style = m_visibilityAnim->getStyle();
+            if (!style.starts_with("slide"))
+                return {0, 0};
+
+            std::string direction = "left";
+            if (const auto space = style.find(' '); space != std::string::npos && space + 1 < style.size())
+                direction = style.substr(space + 1);
+
+            Vector2D magnitude{0, 0};
+            if (direction == "right")
+                magnitude = {m_size.x, 0.0};
+            else if (direction == "top")
+                magnitude = {0.0, -m_size.y};
+            else if (direction == "bottom")
+                magnitude = {0.0, m_size.y};
+            else
+                magnitude = {-m_size.x, 0.0}; // "left", also the fallback for an unrecognized word
+
+            return magnitude * (1.0 - m_visibilityAnim->value());
+        }
+
         CBox boxAt(const Vector2D& origin) const {
-            return {origin + m_position, m_size};
+            return {origin + m_position + styleOffset(), m_size};
         }
 
         // This widget's own debug-overlay request (see SDebugSpec's doc

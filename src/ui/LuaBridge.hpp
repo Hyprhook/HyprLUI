@@ -305,10 +305,10 @@
 //     interactive widget with no onScroll set behaves exactly as if
 //     HyprLUI weren't there.
 //
-//   animationIn, animationOut (Phase 13 follow-up)
-//     Optional tables ({ enabled?, speed?, bezier?, spring? } - same
-//     shape as hyprlui.animation()'s own table, minus `leaf`, which leaf
-//     this is is implied by which field it's under) overriding the
+//   animationIn, animationOut (Phase 13 follow-up, `style` added Phase 16)
+//     Optional tables ({ enabled?, speed?, bezier?, spring?, style? } -
+//     same shape as hyprlui.animation()'s own table, minus `leaf`, which
+//     leaf this is is implied by which field it's under) overriding the
 //     GLOBAL hyprlui.animation({leaf="in"|"out", ...}) config for just
 //     this one widget. Self-contained, not a partial merge with the
 //     global config - a widget setting animationIn = { speed = 5 } does
@@ -316,9 +316,9 @@
 //     its own. `enabled` defaults to true when the table is given at
 //     all; explicitly setting `enabled = false` forces this ONE widget's
 //     toggle to stay instant even if the global leaf is enabled
-//     elsewhere - `speed`/`bezier`/`spring` are irrelevant and may be
-//     omitted in that case. A widget with neither field set (the common
-//     case) just follows whatever the global config for each leaf
+//     elsewhere - `speed`/`bezier`/`spring`/`style` are irrelevant and
+//     may be omitted in that case. A widget with neither field set (the
+//     common case) just follows whatever the global config for each leaf
 //     currently is, same as before this existed. Used identically
 //     regardless of WHY visibility is changing - an explicit
 //     set_widget_visible() call, this widget being removed via
@@ -326,8 +326,9 @@
 //     window opening via window() or closing via remove_canvas()/
 //     set_canvas_visible() - there is no separate creation/removal
 //     animation concept, just becoming visible or becoming hidden.
-//     Deliberately not named "fade" - opacity is the only thing actually
-//     animated today, but the mechanism itself is generic.
+//     Deliberately not named "fade" - opacity is not the only thing
+//     animated any more (see `style` below), but the mechanism itself is
+//     generic either way.
 //
 //     `bezier`/`spring` both name a curve already registered process-
 //     wide (Animation::mgr(), shared with Hyprland's own window/
@@ -337,6 +338,33 @@
 //     own hl.curve({type="spring", name=..., ...}) - HyprLUI has no way
 //     to define a NEW spring itself, only reference one Hyprland (or the
 //     user's config) already registered.
+//
+//     `style` (Phase 16, DESIGN.md) - a position-slide layered on TOP of
+//     the opacity fade above, reusing Hyprland's OWN windowsIn/windowsOut
+//     style string syntax (WindowAnimationController.cpp): "slide" or
+//     "slide left|right|top|bottom" (direction defaults to "left" if
+//     omitted - unlike Hyprland's own "auto-pick the nearest monitor
+//     edge" when no direction is given, which needs monitor geometry a
+//     plain widget doesn't have). Only "slide" is implemented - "popin"/
+//     "gnome" (Hyprland's other two styles) need a genuine scale-through-
+//     render capability this codebase doesn't have yet, and are rejected
+//     at parse time rather than silently accepted-but-inert. Applies to
+//     ANY widget, not just a window's root - same "no distinction between
+//     a widget and its window" principle as everything else here (a
+//     window's root sliding IS the whole window sliding, exactly like its
+//     opacity fading already worked). The slide distance is always this
+//     widget's own current size along the slide axis, and the SAME 0..1
+//     progress already driving the opacity fade also drives the slide -
+//     they are not independently timed; `style` has no effect at all
+//     unless this leaf is otherwise `enabled` (with a real `speed`).
+//       hl.plugin.hyprlui.window({
+//         name = "panel", anchor = "top-right",
+//         hl.plugin.hyprlui.Box({
+//           id = "root", w = 240, h = 60, color = 0xff223344,
+//           animationIn = { speed = 3, bezier = "default", style = "slide right" },
+//           animationOut = { speed = 3, bezier = "default", style = "slide right" },
+//         }),
+//       })
 //
 //   fill (Phase 15, DESIGN.md)
 //     Boolean, default false. "Stretch to match my parent's available
@@ -635,6 +663,13 @@
 //     windows on the *same* edge don't stack relative to each other (each
 //     still only excludes itself) - fine for a single top bar, but a
 //     second top bar needs manual x/y offsetting for now.
+//
+//     A window's own open/close SLIDE (Phase 16) is configured via its
+//     ROOT WIDGET's `animationIn`/`animationOut.style` field - see that
+//     doc block above (widget construction) - not a separate `window{}`
+//     field. A window IS its root widget as far as visibility/animation
+//     goes (CCanvas::setVisible() delegates to it entirely), same as the
+//     opacity fade already worked.
 //
 //   remove_canvas(name)
 //     Closes a window and everything in it.

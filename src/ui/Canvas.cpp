@@ -76,6 +76,23 @@ namespace HyprLUI {
             }
         }
 
+        // Style slide offset (Phase 16 follow-up, DESIGN.md) - CWidget::
+        // styleOffset() computes this from the ROOT WIDGET's own
+        // visibility animation (its own animationIn/animationOut override
+        // if it has one, else the global hyprlui.animation() config) - no
+        // separate per-canvas mechanism needed, `style` is just another
+        // field on the SAME config shape animationIn/animationOut/
+        // hyprlui.animation() already share (see CWidget::styleOffset()'s
+        // own doc comment, Widget.hpp). Cached here (rather than read
+        // inline where it's used below) so fullDamageBox() - used by the
+        // redamage tick just below, which also runs while invisible - has
+        // a value ready even before this frame's real m_root->render()
+        // call further down. m_position itself is never touched here or
+        // anywhere else - anchor tracking, hit-testing, and every other
+        // position-consumer keeps using the real, settled position
+        // throughout the whole slide.
+        m_styleOffset = m_root ? m_root->styleOffset() : Vector2D{0, 0};
+
         // Anchor tracking (if any) is re-resolved every frame too - cheap
         // (a handful of monitors, one name comparison each) and keeps the
         // window correctly placed across resolution/reserved-area changes
@@ -97,13 +114,16 @@ namespace HyprLUI {
         if (!m_root || !m_root->visible())
             return;
 
-        // An animation changes rendered opacity every frame for its whole
-        // duration - keep re-damaging every frame while anything in this
-        // window's tree (including the root itself) is still animating,
-        // same reasoning as damage()'s own multi-frame redamage countdown
-        // above, just driven continuously instead of a fixed 4-frame
-        // burst. This is also what keeps a removeCanvas()'d, fading-out
-        // canvas alive in CUIManager's m_pendingRemoval for as long as its
+        // An animation changes rendered opacity (or, since Phase 16, ALSO
+        // position - CWidget::styleOffset() reads the exact same
+        // m_visibilityAnim isAnimating() already checks, so no separate
+        // check is needed here) every frame for its whole duration - keep
+        // re-damaging every frame while anything in this window's tree
+        // (including the root itself) is still animating, same reasoning
+        // as damage()'s own multi-frame redamage countdown above, just
+        // driven continuously instead of a fixed 4-frame burst. This is
+        // also what keeps a removeCanvas()'d, fading/sliding-out canvas
+        // alive in CUIManager's m_pendingRemoval for as long as its
         // animation actually takes: hasPendingRedamage() (which that
         // sweep checks) stays true as long as damage() keeps getting
         // called.
@@ -111,11 +131,14 @@ namespace HyprLUI {
             damage();
 
         m_root->arrange();
-        // No separate canvas-level opacity multiplier - the root widget's
-        // own composedOpacity() already folds in its own animationIn/
-        // animationOut progress (see CWidget::setVisible()), which is all
-        // "a window fading" ever was under the hood. parentOpacity here
-        // is a plain 1.0, same as any other widget's topmost ancestor.
+        // No separate canvas-level opacity OR position multiplier - the
+        // root widget's own composedOpacity()/styleOffset() already fold
+        // in its own animationIn/animationOut progress (see CWidget::
+        // setVisible()), which is all "a window fading/sliding" ever was
+        // under the hood. `m_position` is passed PLAIN here (not + m_styleOffset
+        // - that would double-apply it, since boxAt()/render() internally
+        // add root's OWN styleOffset() already) - parentOpacity is a plain
+        // 1.0, same as any other widget's topmost ancestor.
         m_root->render(m_position, 1.0F);
 
         // Debug overlay (box-model outlines/labels) is an entirely

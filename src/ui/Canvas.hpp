@@ -127,10 +127,26 @@ namespace HyprLUI {
         // re-painted. A few logical-pixel pad survives this regardless of
         // scale - cheap insurance, not worth computing precisely per-
         // monitor-scale for a strip this thin.
+        // Also accounts for the root widget's own `style` slide offset
+        // (Phase 16, CWidget::styleOffset()) while it's actively in flight
+        // (see render()'s doc comment for `m_styleOffset`, cached here each
+        // frame) - the ACTUAL rendered position during a slide is
+        // m_position + m_styleOffset, which is off to one side of the
+        // settled box() this function would otherwise report alone. Same
+        // "extend the box toward wherever this canvas is really drawing
+        // beyond its settled footprint" reasoning as m_debugOverflow above,
+        // just a directional offset instead of a per-side overlay -
+        // std::max(0, ...)/std::max(0, -...) picks out whichever ONE side
+        // the offset currently extends toward (never both at once, since a
+        // slide only ever moves along one axis in one direction at a time).
         static constexpr double EDGE_ROUNDING_PAD = 2.0;
         CBox                    fullDamageBox() const {
-            const double left = m_debugOverflow.left + EDGE_ROUNDING_PAD, top = m_debugOverflow.top + EDGE_ROUNDING_PAD;
-            const double right = m_debugOverflow.right + EDGE_ROUNDING_PAD, bottom = m_debugOverflow.bottom + EDGE_ROUNDING_PAD;
+            const double slideLeft = std::max(0.0, -m_styleOffset.x), slideRight = std::max(0.0, m_styleOffset.x);
+            const double slideTop = std::max(0.0, -m_styleOffset.y), slideBottom = std::max(0.0, m_styleOffset.y);
+            const double left   = m_debugOverflow.left + EDGE_ROUNDING_PAD + slideLeft;
+            const double top    = m_debugOverflow.top + EDGE_ROUNDING_PAD + slideTop;
+            const double right  = m_debugOverflow.right + EDGE_ROUNDING_PAD + slideRight;
+            const double bottom = m_debugOverflow.bottom + EDGE_ROUNDING_PAD + slideBottom;
             return {{m_position.x - left, m_position.y - top}, {m_size.x + left + right, m_size.y + top + bottom}};
         }
 
@@ -322,6 +338,7 @@ namespace HyprLUI {
         // if there's no root yet (a transient state between createCanvas()
         // and setRoot() within a single hyprlui.window() call - never
         // actually observed mid-frame, but harmless to guard against).
+        //
         void setVisible(bool visible) {
             if (m_root) {
                 m_root->setVisible(visible);
@@ -362,6 +379,7 @@ namespace HyprLUI {
         uint64_t                             m_sequence = 0;
         std::function<void(const Vector2D&)> m_onSizeChanged;
         SEdgeInsets                          m_debugOverflow; // how far the debug overlay currently draws beyond box() on each side - see fullDamageBox()
+        Vector2D m_styleOffset; // Phase 16 - m_root->styleOffset(), cached here each render() frame for fullDamageBox() to read; see render()'s own doc comment
     };
 
     using PCanvas = std::shared_ptr<CCanvas>;

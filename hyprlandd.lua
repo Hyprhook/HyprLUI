@@ -1361,6 +1361,78 @@ hl.bind("ALT + SHIFT + 5", function()
 	hyprluiMatrixWindowOpen = true
 end, { description = "HyprLUI: toggle the row-of-columns fill matrix test" })
 
+--------------------------------------------------
+---- HYPRLUI STYLE TEST (Phase 16 follow-up) ----
+--------------------------------------------------
+-- Exercises `style` (DESIGN.md Phase 16) - now just another field on the
+-- SAME animationIn/animationOut config shape hyprlui.animation() and
+-- every widget's own override already share (enable/speed/bezier-or-
+-- spring/style), NOT a separate `window{}`-level mechanism - a window's
+-- root widget sliding IS the whole window sliding, exactly the same "no
+-- distinction between a widget and its window" principle its opacity
+-- fade already had. This window sets `style = "slide left"` on BOTH
+-- animationIn and animationOut (same 0..1 progress drives opacity AND
+-- slide together, they're not independently timed) - and applies
+-- uniformly to ANY visibility change, not just creation: ALT+SHIFT+7
+-- below just calls set_canvas_visible(), and it slides/fades exactly the
+-- same as opening/closing the window would.
+local HYPRLUI_STYLE_WINDOW = "hyprlui_style_test"
+local hyprluiStyleWindowOpen = false
+local hyprluiStyleWindowVisible = true
+
+-- ALT + SHIFT + 6: toggle the slide test window.
+hl.bind("ALT + SHIFT + 6", function()
+	if hyprluiStyleWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_STYLE_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiStyleWindowOpen = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = HYPRLUI_STYLE_WINDOW,
+			anchor = "left",
+			x = 20,
+			hl.plugin.hyprlui.Stack({
+				id = "root",
+				animationIn = { speed = 3, bezier = "default", style = "slide left" },
+				animationOut = { speed = 3, bezier = "default", style = "slide left" },
+				hl.plugin.hyprlui.Box({ id = "bg", w = 200, h = 100, color = 0xff224488, rounding = 8 }),
+				hl.plugin.hyprlui.Text({
+					id = "label",
+					x = 12,
+					y = 12,
+					text = "ALT+SHIFT+7 to toggle visibility",
+					size = 12,
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.window", err)
+		return
+	end
+	hyprluiStyleWindowOpen = true
+	hyprluiStyleWindowVisible = true
+end, { description = "HyprLUI: toggle the style/slide test window" })
+
+-- ALT + SHIFT + 7: toggle the style test window's visibility without
+-- destroying it - same slide+fade as open/close (see the section comment
+-- above for why).
+hl.bind("ALT + SHIFT + 7", function()
+	if not hyprluiStyleWindowOpen then
+		return
+	end
+	hyprluiStyleWindowVisible = not hyprluiStyleWindowVisible
+	local ok, err = pcall(hl.plugin.hyprlui.set_canvas_visible, HYPRLUI_STYLE_WINDOW, hyprluiStyleWindowVisible)
+	if not ok then
+		hyprluiWarn("hyprlui.set_canvas_visible", err)
+	end
+end, { description = "HyprLUI: toggle style test window visibility" })
+
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required
 -- w/h fields, so buildWidget() hits requireFieldNumber() -> luaL_error()

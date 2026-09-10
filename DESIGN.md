@@ -2393,12 +2393,105 @@ piece (raw-keysym limitation).
       fallback branch) - see the Open Questions entry for the regression
       this specific gap caused and full before/after trace.
 
-- [ ] **Phase 16** - Animated window movement/size, and (building on
-      that) Hyprland-style animation `style` support (`slide`/`popin`/
-      `gnome` for windows - see `WindowAnimationController.cpp`). Not
-      started. Depends on Phase 14's primitives and Phase 15's `fill`
-      (which resolves the layout gap `popin` specifically would otherwise
-      hit - see Phase 14's own note, now resolved).
+- [x] **Phase 16** - Hyprland-style window `style` support (`slide`/
+      `popin`/`gnome` - see `WindowAnimationController.cpp`). First slice
+      shipped: `style = "slide"`/`"slide left|right|top|bottom"` only -
+      `popin`/`gnome` deferred, see below.
+    - **Restructured mid-phase, on explicit request, to fold `style` into
+      the EXISTING animationIn/animationOut/hyprlui.animation() config
+      shape** instead of a separate `window{}`-level field/mechanism (the
+      shape this first shipped as - see the git history for that version).
+      The user's framing: HyprLUI should mirror Hyprland's OWN animation
+      config more closely - one GLOBAL `hyprlui.animation({leaf=
+      "in"|"out", ...})` with two leaves, and every widget/window able to
+      override those same leaves via its own `animationIn`/`animationOut`
+      - and the settings shape (`enable`, `speed`, `bezier`/`spring`) should
+      just gain a fourth member, `style`, present at BOTH the global-leaf
+      and the per-widget-override level, exactly like Hyprland's own
+      `windowsIn`/`windowsOut` already carry a style string alongside
+      speed/curve. This was a clean fit, not a workaround: Hyprutils'
+      `SAnimationPropertyConfig` (the struct `CWidgetAnimations`/
+      `makeAnimationConfig()` already build, Widget.hpp) already HAS an
+      `internalStyle` field, and `CBaseAnimatedVariable::getStyle()`
+      already reads it back - both sitting there unused by HyprLUI until
+      now. `CWidgetAnimations::configure()`/`makeAnimationConfig()` gained
+      a `style` param storing straight into `internalStyle`;
+      `hyprlui.animation()`/`optAnimationOverrideField()` (LuaBridge.cpp)
+      both parse it via a new shared `optStyleField()`.
+    - **Mechanism: reuses the SAME `m_visibilityAnim` opacity-fade animvar
+      for slide progress too, not a second independently-configured one**
+      - `speed`/`bezier`-or-`spring` govern BOTH opacity and slide
+      together, not independently, matching Hyprland's own model exactly
+      (`WindowAnimationController.cpp`'s `animateIn()`/`animateOut()`
+      always fade alpha 0<->1 regardless of style - position and alpha
+      share one animation there too). This is simpler than the first
+      version's separate `CCanvas::m_styleAnim` AND more correct: no
+      cross-animation completion synchronization is needed anywhere
+      (removal-delay gating, redamage-while-animating, etc. all "just
+      work" by virtue of there being only one animvar to ask).
+    - **Generalized to ANY widget, not just a window's root** - new
+      `CWidget::styleOffset()` (Widget.hpp, public) reads
+      `m_visibilityAnim->getStyle()`, parses the (already-validated)
+      "slide"/"slide `<direction>`" string, and returns a position offset
+      scaled by `(1 - m_visibilityAnim->value())` - direction defaults to
+      "left" if none given (Hyprland's own "auto-pick the nearest monitor
+      edge" default isn't implemented - needs monitor geometry a plain
+      widget doesn't have). Wired into the three places a widget's
+      position is ever consumed: `boxAt()` (a leaf's own draw box, and
+      hitTest()'s self-check), the default `render()`'s child recursion,
+      and `hitTest()`'s child recursion - so a `style`-sliding SUB-widget
+      (not just a window root) now genuinely slides, visually and for hit-
+      testing, with zero special-casing at any of those three call sites
+      beyond adding `+ styleOffset()`. `CCanvas` no longer has any style-
+      specific mechanism of its own at all - `CCanvas::render()` just
+      reads `m_root->styleOffset()` once per frame (cached into
+      `m_styleOffset`, Canvas.hpp) for `fullDamageBox()`'s sake; the
+      actual render-time offset happens INSIDE `m_root->render()`/
+      `boxAt()` via the same generic per-widget mechanism every other
+      widget uses, so `CCanvas` must pass `m_position` PLAIN to
+      `m_root->render()` (adding `m_styleOffset` there too would double-
+      apply it).
+    - **Scope: open/close only**, not a general move/resize animation for
+      arbitrary `set_canvas_position()`/`set_canvas_size()` calls - those
+      stay instant, unchanged. `style` (like the opacity fade it now
+      shares an animvar with) is driven from `CWidget::setVisible()`, so
+      it applies uniformly to ANY visibility change (creation,
+      `remove_canvas()`, `set_canvas_visible()`, `set_widget_visible()`,
+      `remove_widget()`) - same "no distinction between why visibility
+      changed" principle Phase 13 established, now also true for `style`.
+    - **Damage box correctness**: `CCanvas::fullDamageBox()` still extends
+      toward whichever ONE side `m_styleOffset` currently points (same
+      `m_debugOverflow`-style reasoning as before), just now reading that
+      offset from `m_root->styleOffset()` each frame instead of a
+      separate animvar. The continuous-redamage-while-animating check
+      reverted to its pre-Phase-16 simple form (`if (m_root->isAnimating())
+      damage();`) - no longer needs an extra style-specific check, since
+      `isAnimating()` (which walks `m_visibilityAnim` for every widget
+      already) now inherently covers slide too, there being only the one
+      animvar.
+    - **`popin`/`gnome` still deferred, not started**: both need a
+      genuine shrink/grow SCALE effect, which can't be done by resizing
+      each widget's actual `m_size` (would re-fight layout/`fill` every
+      frame) - it needs a real scale factor threaded through the whole
+      `render()` call chain (same shape as how `parentOpacity` is already
+      threaded), since `gfx.cpp`'s `drawRect()`/`drawTexture()` only take
+      an absolute `CBox`, no transform concept at all. Confirmed via
+      direct grep of `gfx.hpp`/`Render.cpp` - no scale/matrix capability
+      exists anywhere in this codebase's render pipeline today. Rejected
+      at parse time (`optStyleField()`) rather than silently accepted-
+      but-inert.
+    - Hit-testing during an in-flight slide DOES follow the visual offset
+      now (via `boxAt()`, see above) - a deliberate change from the first
+      version's "hit-test at the real, settled position" choice, since
+      generalizing to any widget made "click where it visually is" both
+      the simpler implementation (one shared `boxAt()`) and the more
+      correct UX (WYSIWYG clicking) - no longer treated as a documented
+      gap.
+    - Not re-tested live in a running compositor this session - build/
+      `nm`/lint are clean, and the damage-box/redamage-lifetime and
+      double-offset reasoning were worked through carefully given the
+      fill-phase's own damage bugs earlier this session, but this needs
+      live confirmation (`ALT+SHIFT+6`/`ALT+SHIFT+7`, `hyprlandd.lua`).
 
 ## Open questions
 
