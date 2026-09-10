@@ -639,6 +639,44 @@ namespace HyprLUI {
             m_fixedH = h;
         }
 
+        // Cross-axis stretch (a Phase 15 prerequisite for animated window
+        // sizing, DESIGN.md) - "this widget should match its parent's
+        // available size instead of sizing itself from its own content."
+        // Interpreted differently per parent type, all via the SAME
+        // public setSize() above, applied during arrange() (AFTER the
+        // whole tree's measure() pass has already finished, so this never
+        // feeds back into any size CALCULATION, only overrides the
+        // already-settled result for layout purposes) - deliberately a
+        // per-frame, non-pinning override (unlike setFixedSize() above,
+        // which persists and is re-applied every future measure() too):
+        //   - CFlexWidget (Row/Column): stretches to the row/column's
+        //     full CROSS-axis space (like CSS align-self: stretch) - the
+        //     MAIN axis is untouched, still sized from this widget's own
+        //     content (flex-grow along the main axis is explicitly out of
+        //     scope, see DESIGN.md).
+        //   - CStackWidget: matches the stack's own full measured size at
+        //     position (0, 0) - ignores the stack's padding, consistent
+        //     with CStackWidget's own already-established "manual
+        //     positioning, no padding interpretation" design.
+        //   - A window's root widget: matches its CCanvas's own size, but
+        //     only on axes where the canvas actually HAS a determinate
+        //     size (an explicit w/h from hyprlui.window() or
+        //     set_canvas_size()) - an auto-sized (size-to-content) axis
+        //     has nothing determinate to fill, so is left untouched, same
+        //     inherent limitation CSS stretch has against an "auto"
+        //     parent.
+        // A widget with no non-fill sibling/ancestor establishing a real
+        // size on some axis (e.g. a Stack whose ONLY child is also
+        // `fill`, or a root widget in a fully auto-sized window) has
+        // nothing to stretch TO on that axis and stays at its own natural
+        // size there - expected, not a bug, same as CSS.
+        void setFill(bool fill) {
+            m_fill = fill;
+        }
+        bool fill() const {
+            return m_fill;
+        }
+
         // Clamps measure()'s result to [min, max] on each axis independently
         // (either bound may be omitted). Applied AFTER setFixedSize()'s
         // override, same precedence CSS gives min/max-width over an
@@ -779,13 +817,54 @@ namespace HyprLUI {
         // frame - a Phase 13 fade being the most common case).
         std::optional<CBox> renderDebug(const Vector2D& origin, const SDebugSpec& inherited);
 
+      public:
+        // Snapshots this widget's CURRENT m_size as its own natural/
+        // intrinsic content size, read back by the default measureContent()
+        // below every frame - called once by buildWidget() (LuaBridge.cpp)
+        // right after a widget is fully constructed (including any type-
+        // specific size assignment, e.g. CRectNode's w/h constructor args),
+        // before it could ever participate in a frame's measure()/arrange()
+        // pass. Also called again by CImageWidget::reload() whenever
+        // setImage() genuinely changes the decoded texture's size - the one
+        // leaf type whose natural size can legitimately change AFTER
+        // construction without going through setFixedSize(). A container or
+        // CTextNode's own measureContent() override never reads
+        // m_naturalSize at all (they derive their size some other way every
+        // frame), so calling this on them is harmless.
+        void primeNaturalSize() {
+            m_naturalSize = m_size;
+        }
+
       protected:
-        // Sets m_size from this widget's own content/children. Default:
-        // leave m_size as-is (right for leaves that already know their
-        // size, e.g. CRectNode). Containers override this to derive their
-        // size from already-measured children (measure() guarantees
-        // children are measured first).
-        virtual void measureContent() {}
+        // Sets m_size from this widget's own content/children every frame.
+        // Default: reset to this widget's own natural/intrinsic size (see
+        // primeNaturalSize() above) - correct for a LEAF (CRectNode/
+        // CImageWidget/CButtonWidget/etc; nothing about its own size
+        // depends on anything that changes frame to frame, the same way a
+        // container's already-existing override derives its size fresh
+        // from children every frame). Containers (CStackWidget/CFlexWidget)
+        // and CTextNode override this entirely instead, deriving their size
+        // some other way every frame - m_naturalSize is irrelevant to them.
+        //
+        // This is what makes a LEAF self-correcting exactly like a
+        // container already was: without it, a `fill` child's stretch
+        // (setFill(), applied via setSize() during arrange()) would leave
+        // m_size permanently at whatever it was last stretched to, since
+        // nothing else would ever touch it again - the exact sticky-growth
+        // hazard CStackWidget::measureContent()/CFlexWidget::
+        // measureContent()'s own doc comments describe, except now closed
+        // at the SOURCE for every leaf type instead of needing each
+        // container type to separately guard against a stale value leaking
+        // in. Found live (DESIGN.md, Phase 15) via a `fill` root Stack
+        // whose ONLY children were both `fill` - CStackWidget::
+        // measureContent()'s "count fill children at their own pre-stretch
+        // size when there's nothing else" fallback initially reused
+        // whatever a leaf's `m_size` currently held, which - before this
+        // fix - could still be a stale, already-stretched value from
+        // several frames ago, not a genuine pre-stretch one.
+        virtual void measureContent() {
+            m_size = m_naturalSize;
+        }
 
         // Positions m_children (their setPosition()) based on this
         // widget's own m_size. Default: no-op - right for leaves and for
@@ -796,8 +875,10 @@ namespace HyprLUI {
         std::string                                        m_id;
         Vector2D                                           m_position;
         Vector2D                                           m_size;
+        Vector2D                                           m_naturalSize; // Phase 15 follow-up - see primeNaturalSize()'s doc comment
         bool                                               m_visible = true;
         std::optional<double>                              m_fixedW, m_fixedH;
+        bool                                               m_fill = false; // Phase 15 - see setFill()'s doc comment
         std::optional<double>                              m_minW, m_minH, m_maxW, m_maxH;
         SEdgeInsets                                        m_padding, m_margin;
         double                                             m_opacity = 1.0;

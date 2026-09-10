@@ -89,7 +89,7 @@
 ---@field close fun(self: HyprLUI.Socket): nil
 
 -- hyprlui.animation({leaf="in"|"out", ...}) (Phase 13, DESIGN.md) -
--- configures the shared fade duration/curve for set_widget_visible()
+-- configures the shared duration/curve for set_widget_visible()
 -- transitions. NOT the same tree as Hyprland's own hl.animation() -
 -- verified there's no public API to register a new leaf into that tree
 -- from outside, so this is a small separate config surface, shaped like
@@ -97,24 +97,32 @@
 -- deciseconds (tenths of a second), same unit hl.animation() uses.
 -- `enabled` defaults to true; pass enabled=false to turn an already-
 -- configured leaf back into an instant (non-animated) toggle - speed/
--- bezier are irrelevant and may be omitted in that case.
+-- bezier/spring are irrelevant and may be omitted in that case. `bezier`
+-- and `spring` both name a curve already registered process-wide (a
+-- built-in bezier, or one either you or the user's own hyprland.lua
+-- defined via hl.curve()/hl.curve({type="spring", ...})) - give at most
+-- one; `bezier` wins if somehow both are given (same precedence as
+-- hl.animation() itself), and it defaults to "default" if neither is
+-- given at all.
 ---@class HyprLUI.AnimationOpts
 ---@field leaf "in"|"out"
 ---@field enabled? boolean
 ---@field speed? number
 ---@field bezier? string
+---@field spring? string
 
 -- A widget's own `animationIn`/`animationOut` field (Phase 13 follow-up) -
 -- same shape as HyprLUI.AnimationOpts minus `leaf` (implied by which
 -- field this is), overriding hyprlui.animation()'s global config for just
 -- this ONE widget. Self-contained, not a partial merge with the global
--- config - `speed`/`bezier` are only required unless this explicitly sets
+-- config - `speed` is only required unless this explicitly sets
 -- `enabled = false` (which forces this widget's toggle to stay instant
 -- even if the global leaf is enabled).
 ---@class HyprLUI.AnimationOverride
 ---@field enabled? boolean
 ---@field speed? number
 ---@field bezier? string
+---@field spring? string
 
 -- Either a single number (applied to all four sides) or a table with any
 -- subset of sides given (an omitted side defaults to 0, NOT to whatever
@@ -189,6 +197,7 @@
 ---@field onClick? HyprLUI.OnClickFn
 ---@field animationIn? HyprLUI.AnimationOverride
 ---@field animationOut? HyprLUI.AnimationOverride
+---@field fill? boolean
 ---@field [integer] HyprLUI.WidgetSpec
 
 -- `delta` is the raw IPointer::SAxisEvent value forwarded as-is (no
@@ -384,8 +393,11 @@
 ---@field Component fun(name: string, props?: table, opts?: HyprLUI.ComponentOpts): HyprLUI.WidgetSpec
 ---@field remove_canvas fun(name: string): nil
 ---@field set_canvas_visible fun(name: string, visible: boolean): nil
+---@field set_canvas_position fun(name: string, x: number, y: number): nil
+---@field set_canvas_size fun(name: string, w: number?, h: number?): nil
 ---@field set_widget_visible fun(window: string, id: string, visible: boolean): nil
 ---@field set_widget_disabled fun(window: string, id: string, disabled: boolean): nil
+---@field set_widget_size fun(window: string, id: string, w: number?, h: number?): nil
 ---@field set_text fun(window: string, id: string, text: string): nil
 ---@field set_input_text fun(window: string, id: string, text: string): nil
 ---@field get_input_text fun(window: string, id: string): string

@@ -251,6 +251,32 @@ namespace HyprLUI {
         // limitation, see DESIGN.md. Returns whether m_position changed.
         bool recomputeAnchorPosition();
 
+        // Clears any anchor set via setAnchor(), so recomputeAnchorPosition()
+        // becomes a no-op and this window's position is solely driven by
+        // explicit setPosition() calls from here on - used by
+        // hyprlui.set_canvas_position() (LuaBridge.cpp): an explicit
+        // position and an anchor are mutually exclusive, same as
+        // hyprlui.window()'s own creation-time x/y-vs-anchor semantics
+        // (giving `anchor` means x/y are an OFFSET, not a raw position -
+        // explicitly repositioning later means there's no anchor left for
+        // x/y to be an offset FROM). Does NOT clear m_exclusiveEdge - a
+        // still-exclusive window that's been explicitly repositioned away
+        // from its anchor keeps reserving space as if it were still there
+        // (a known v1 gap, not specially guarded against here).
+        void clearAnchor() {
+            m_anchor.reset();
+        }
+
+        // Repositions this window to an explicit global position,
+        // clearing any anchor first (see clearAnchor()'s doc comment -
+        // the two are mutually exclusive) and damaging both the old and
+        // new footprint, same as recomputeAnchorPosition() already does
+        // for an anchor-driven move. A no-op if the position doesn't
+        // actually change. Used by hyprlui.set_canvas_position()
+        // (LuaBridge.cpp) - implemented in Canvas.cpp since it needs
+        // gfx::damageBox().
+        void moveTo(const Vector2D& position);
+
         void setSize(const Vector2D& size) {
             m_size = size;
         }

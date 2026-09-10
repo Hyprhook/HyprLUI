@@ -1832,10 +1832,12 @@ piece (raw-keysym limitation).
       is the same defense Watcher.cpp's own timers already use (by
       watcher name, not a pointer) - this project's established pattern
       for the same hazard, not a new one invented here.
-- [x] **Phase 13** (stretch) - Fade animations via Hyprland's animation
-      manager. Kept last on purpose - animation polish makes the most
-      sense once the widgets it'd animate (and the state that drives
-      them, Phases 11/12) already exist.
+- [x] **Phase 13** (stretch) - Fade/opacity-based visibility animations
+      via Hyprland's animation manager. Originally planned as the last
+      phase - animation polish makes the most sense once the widgets it'd
+      animate (and the state that drives them, Phases 11/12) already
+      exist - but turned out to open up enough further animation work
+      (Phases 14/15) that it's no longer actually last.
     - **Scoped down from the original two-part description**: the
       "metatable-based auto-tracking reactivity underneath `Bind()`" half
       was dropped after an explicit discussion - every prior phase (3, 9,
@@ -2140,9 +2142,322 @@ piece (raw-keysym limitation).
           no separate per-canvas override concept needed - exactly the
           "should not distinguish toggle vs. creation/removal" requirement
           this follow-up was about.
+    - **Third follow-up (same session): spring curves**, mirroring
+      Hyprland's own `hl.animation()`, which accepts a `spring = "name"`
+      field as an alternative to `bezier = "name"` - referencing a curve
+      the user registered via `hl.curve({type="spring", ...})`, a
+      different (velocity/damping-based, not a fixed easing shape)
+      interpolation model.
+        - Confirmed by reading Hyprland's own `hlAnimation()`
+          (`LuaBindingsConfigRules.cpp`) exactly how a chosen spring gets
+          encoded: `curveName = std::format("spring:{}", springName)` -
+          the SAME string `SAnimationPropertyConfig::internalBezier`
+          field a plain bezier name would use, just prefixed. Hyprland's
+          own `CBaseAnimatedVariable` recognizes that prefix internally
+          when actually consuming a curve (`isSpringCurve()`/
+          `springNameFromSpec()`, declared in Hyprutils'
+          `AnimatedVariable.hpp`) - meaning HyprLUI never has to
+          interpret the string itself, it was ALREADY a pure pass-through
+          for a plain bezier name, and stays exactly that for a spring
+          reference too. Zero new C++ animation machinery needed - this
+          is purely a Lua-argument-parsing change.
+        - `CAnimationManager::springExists(name)`/`getSpring(name)` are
+          the spring equivalents of `bezierExists()`/`getBezier()`, on
+          the SAME shared `Animation::mgr()` singleton - a spring the
+          user already defined for their own window animations is
+          reusable here by name, same as a bezier already was.
+        - New shared helper `resolveCurveField()` (`LuaBridge.cpp`) -
+          checks `bezier` first, `spring` second (exact same precedence
+          `hlAnimation()` itself uses if somehow both are given),
+          validates via `bezierExists()`/`springExists()` respectively,
+          and returns either the plain bezier name or the "spring:"-
+          prefixed spring name. Used by both `hyprlui.animation()` (the
+          global config) and `optAnimationOverrideField()` (the
+          per-widget override) - the exact same resolution logic both
+          already needed, just extended to check a second field.
+        - The demo spring in `hyprlandd.lua` (`stiffness=200,
+          damping=12, mass=1`) turned out visually/behaviorally broken
+          when actually tried live - underdamped enough that opacity
+          (the only thing HyprLUI actually animates) overshoots outside
+          `[0, 1]` transiently, which doesn't read as a nice "bounce" the
+          way an overshooting position/size would. Reverted the demo to
+          a plain bezier per direct instruction - the `spring` field
+          itself is unaffected (still fully supported, same code path),
+          this was a demo-tuning issue, not a bug in the feature. Worth
+          keeping in mind for any future spring-based demo: springs
+          tuned for Hyprland's own position/size window animations
+          aren't necessarily good defaults for an opacity-only animation.
+
+- [x] **Phase 14** - Window position/size mutation primitives:
+      `hyprlui.set_canvas_position(name, x, y)` / `hyprlui.set_canvas_size
+      (name, w, h)`. Split out as its own phase rather than a Phase 13
+      "follow-up" - it's really a separate, self-contained feature, not
+      fade/opacity-animation work; it was originally motivated as
+      groundwork for animatable window movement (see Phase 16) and for
+      Hyprland-style animation `style`s (`slide`/`popin`/`gnome`), which
+      (confirmed by reading `WindowAnimationController.cpp`'s
+      `applyWindowStyle()`/`applySlide()`/`applyGnomed()`/`applyPopin()`)
+      turn out to require animating POSITION and SIZE, not just opacity -
+      a materially bigger feature than the curve work, deliberately not
+      attempted without this groundwork first.
+    - `set_canvas_position()`: new `CCanvas::moveTo()` (`Canvas.cpp`) -
+      clears any anchor first (`CCanvas::clearAnchor()`, new) since an
+      explicit position and an anchor are mutually exclusive, same
+      semantics `hyprlui.window()`'s own creation-time x/y-vs-anchor
+      already has, then damages old+new footprint exactly like
+      `recomputeAnchorPosition()` already does for an anchor-driven move
+      (reused the identical pattern, not a new one). A no-op if the
+      position doesn't actually change.
+    - `set_canvas_size()`: just calls the ALREADY-existing
+      `CWidget::setFixedSize()` - needed NO new damage handling at all,
+      since `CCanvas::render()`'s existing per-frame content-size sync
+      (there since Phase 1-ish) already notices `m_fixedW`/`H` changing
+      and damages the old/new footprint correctly on the very next frame,
+      regardless of WHY it changed. `w`/`h` are each independently
+      optional (nil lets that one axis size-to-content again), mirroring
+      `window()`'s own w/h fields exactly.
+    - Both are plain, INSTANT mutations - deliberately not animated in
+      this pass (matches how `set_widget_visible()` itself started
+      instant back in Phase 2 and only grew an optional animated path in
+      Phase 13) - the actual position/size ANIMATION work (Phase 16) is
+      what these two primitives exist to unblock, not something this
+      phase attempts.
+    - Known v1 gap, documented rather than solved: `clearAnchor()` does
+      NOT clear `m_exclusiveEdge` - an exclusive window that's been
+      explicitly repositioned away from its anchor keeps reserving screen
+      space as if it were still there.
+    - **Live-tested finding, resolved by Phase 15's `fill`, not fixed
+      here**: growing a window via `set_canvas_size()` visibly shifts its
+      CONTENT's on-screen position rather than making the content itself
+      look bigger. Root cause: a window's root widget renders at exactly
+      the canvas's own top-left corner and is never told to stretch to
+      fill a canvas size bigger than its own measured content - so
+      pinning the canvas bigger just grows the (invisible) bounding box
+      around unchanged-size content. For a "center"-anchored window this
+      is doubly visible, since centering a now-bigger box around the same
+      monitor-relative midpoint moves that top-left corner outward too,
+      making a pure size change look like a position shift. Correct and
+      expected given nothing asked the content to grow - flagged
+      explicitly because an eventual "popin" style (Phase 16, animating a
+      window from a smaller size up to its real one) will need the
+      CONTENT to visibly scale with the animated size, not just sit
+      unchanged inside a resizing box.
+    - **Follow-up (same session): `hyprlui.set_widget_size(window, id,
+      w, h)`** - the same mutation one level down, per explicit request
+      after discussing whether canvas-level position/size should extend
+      to widgets generally. Position was explicitly SCOPED OUT for
+      widgets (unlike canvases, a widget's position is normally
+      recomputed every single frame by its parent container's
+      `arrangeChildren()` - Row/Column reposition every child based on
+      gap/alignment each render pass, so a manually-set position would
+      just get silently overwritten the very next frame for any Row/
+      Column child; it would only actually stick for a `Stack`'s
+      children, which are the one container that leaves children at
+      whatever position they were given - exposing it generally would be
+      a footgun that works for some widgets and silently no-ops for
+      others, so left for a future, Stack-scoped follow-up if ever
+      needed). Size had no such problem - `CWidget::setFixedSize()`
+      already existed internally (every fixed-size-capable widget already
+      uses it at construction), this just exposes it as a runtime
+      mutator, mirroring `set_canvas_size()` exactly. Same "content
+      doesn't stretch to fill on its own" caveat as the canvas-level
+      version applies identically here, for the same reason.
+
+- [x] **Phase 15** - `fill`: "stretch to match my parent's available
+      size instead of sizing myself from my own content" (CSS
+      `align-self: stretch`, not `flex-grow` - no main-axis space
+      distribution, explicitly scoped out after discussion). Directly
+      motivated by - and resolves - Phase 14's own "live-tested finding"
+      about `set_canvas_size()` growing a window without its content
+      visibly growing to match; also the prerequisite Phase 16's `popin`
+      style needs (a window growing from a smaller size to its real one
+      has to have its CONTENT scale with it, not just sit inside a
+      resizing invisible box).
+    - New `CWidget::setFill()`/`fill()` (`Widget.hpp`) - a plain boolean,
+      parsed generically in `buildWidget()`'s common tail (any widget can
+      be a Row/Column/Stack child, or a window's own root widget) rather
+      than restricted to container types the way the `w`/`h` fixed-size
+      override already is.
+    - Implemented via the ALREADY-existing plain `CWidget::setSize()`
+      (direct `m_size` assignment, no pinning side effects - unlike
+      `setFixedSize()`, which persists via `m_fixedW`/`H` and gets
+      re-applied by every future `measure()` pass too) - `fill` needed NO
+      new "set the size" primitive, just new call sites deciding WHEN to
+      use the existing one. Applied during `arrange()` (top-down),
+      strictly AFTER the whole tree's `measure()` pass has already
+      finished bottom-up - so a `fill` child's pre-stretch measured size
+      still contributes normally to whatever ITS OWN parent's size
+      calculation needs, and stretching it doesn't feed back into any
+      measurement, only overrides the already-settled layout result. This
+      also means `CWidget::arrange()`'s existing call order (a widget's
+      own `arrangeChildren()` runs BEFORE recursing into
+      `child->arrange()`) already cascades a stretch correctly with zero
+      reordering: by the time a `fill` child's OWN `arrangeChildren()`
+      runs (laying out ITS children), the parent has already resized it,
+      so grandchildren see the stretched size, not the pre-stretch one.
+    - Three call sites, one per place `fill` is interpreted, all needed
+      per explicit request (not narrowed to Row/Column only):
+        - `CFlexWidget::arrangeChildren()` (`ContainerWidget.cpp`) -
+          cross-axis stretch. A `fill` child's cross-axis size becomes
+          `availForThis` (the same "space actually available to this
+          child" value the existing Center/End alignment math already
+          computed) and its position sits at the lead edge (alignment
+          becomes moot once something fills the whole space) - the MAIN
+          axis is completely untouched, still driven by the child's own
+          measured content, matching the "cross-axis only" scope decision.
+        - `CStackWidget::arrangeChildren()` (new override - the base
+          no-op every other widget type still uses) - a `fill` child
+          matches the stack's own full `m_size` at position (0, 0),
+          ignoring the stack's padding, consistent with `CStackWidget`'s
+          own already-established "no padding interpretation" design (see
+          the file's own header comment).
+        - `CCanvas::render()` - root-fills-canvas. Runs right after the
+          existing content-size sync (so it reads that sync's SETTLED
+          `m_size`, not a stale prior-frame value) - if the root widget
+          has `fill` set, forces its measured size to match the canvas's
+          own size, but ONLY on axes where the canvas actually has a
+          determinate size (`m_fixedW`/`H` set, i.e. an explicit w/h from
+          `window()` or `set_canvas_size()`) - an auto-sized axis has
+          nothing determinate to fill and is left at its natural value.
+    - Inherent, documented (not fixed) degenerate case, same as real CSS
+      stretch: a widget with no non-`fill` sibling/ancestor establishing a
+      real size on some axis - e.g. a Stack whose ONLY child is also
+      `fill`, or a root widget in a fully auto-sized window - has nothing
+      to stretch TO there and just keeps its own natural size. Not a bug;
+      `fill` can only ever match a size that something else determines.
+    - **Bug found and fixed live, same session, testing `set_canvas_size
+      (..., nil, nil)` after growing a window**: shrinking back to
+      "auto" silently did nothing - no damage, size stayed at the grown
+      value forever. Root cause: `fill`'s stretch (`setSize()`) is applied
+      during `arrange()`, strictly AFTER `measure()` - but a LEAF widget's
+      `measureContent()` (Box/Text/etc.) is a no-op, so its `m_size` just
+      keeps whatever `arrange()` last stretched it to; nothing ever resets
+      it. That stale, already-stretched size then got counted as if it
+      were genuine content by the PARENT's own `measureContent()` on the
+      NEXT frame - so a Stack/Row/Column containing a `fill` child never
+      actually shrank back on its own axis, since the parent's own
+      measured size stayed pinned to whatever the fill child was
+      previously inflated to; `set_canvas_size(nil, nil)`'s `contentSize
+      != m_size` check then saw no actual difference and skipped damaging
+      anything. Fixed by having `CStackWidget::measureContent()`/
+      `CFlexWidget::measureContent()` SKIP a `fill` child's contribution
+      entirely (Stack: skip it outright; Flex: skip only its CROSS-axis
+      term, main axis is unaffected either way) - which is also just the
+      semantically correct behavior to begin with (a stretched child
+      shouldn't inflate the very parent it's stretching to match, same as
+      real CSS `align-self: stretch` never affects its own parent's
+      size), not merely a workaround. One narrower instance of the same
+      class of bug is left unfixed, documented at the root-fills-canvas
+      call site in `Canvas.cpp`: a LEAF widget used directly as a
+      window's OWN root (no container) with `fill=true` could exhibit the
+      same stickiness if the CANVAS itself toggles from an explicit size
+      back to auto - not hit by any current widget/demo, so left as a
+      known gap rather than speculatively fixed.
+    - **Demo bug found and fixed live, same session, hit exactly the
+      degenerate case documented above**: the `ALT+SHIFT+3` test window's
+      "bg" (`fill=true`) never appeared at all on window creation - only
+      after `ALT+SHIFT+4` (`set_canvas_size()`) gave the canvas an
+      explicit fixed size, disappearing again once set back to `nil`. Root
+      cause: the demo's `content` Column was ALSO marked `fill=true`
+      (alongside `bg`), leaving the root Stack with zero non-`fill`
+      children to derive a natural size from - `CStackWidget::
+      measureContent()` (which deliberately skips `fill` children, see the
+      bug fix just above) computed `(0, 0)`, and with the canvas itself
+      auto-sized (no `m_fixedW`/`H` yet), root-fills-canvas had nothing to
+      override that with either - so `arrangeChildren()` stretched both
+      `bg` and `content` to nothing. Once `set_canvas_size()` gave the
+      canvas a real size, root-fills-canvas forced the root (and so `bg`)
+      to that size instead, masking the underlying issue. Not a logic bug -
+      exactly the documented "no non-fill sibling to stretch to" case,
+      just self-inflicted by the demo. Fixed by removing the stray
+      `fill = true` from `content` (`hyprlandd.lua`) - it only ever needed
+      its own natural size at its fixed `x=12, y=12` position; `bg` alone
+      stretching behind it was always the intent.
+    - **Follow-up, same session**: the user deliberately put `content`'s
+      `fill=true` BACK to keep exercising the "all children fill" fallback
+      path (see the Open Questions entry below) and found a second, real
+      regression in it - fixed at the SOURCE by giving every leaf widget a
+      real natural/intrinsic size distinct from its laid-out `m_size`:
+      `CWidget::primeNaturalSize()` (`Widget.hpp`) snapshots it once
+      (called generically by `buildWidget()`'s common tail, `LuaBridge.cpp`,
+      right after each widget is fully constructed - and again by
+      `CImageWidget::reload()` whenever `setImage()` genuinely changes the
+      decoded texture's size, the one leaf type whose natural size can
+      change post-construction), and `CWidget::measureContent()`'s DEFAULT
+      (previously a pure no-op) now resets `m_size` to it every frame -
+      making a leaf self-correcting exactly like a container already was,
+      instead of staying stuck at whatever a `fill` stretch last left it
+      at. This is the real, general fix for the sticky-leaf hazard the
+      Phase 15 bug-fix entries above kept having to work around one call
+      site at a time (the original child-exclusion fix, then its own
+      fallback branch) - see the Open Questions entry for the regression
+      this specific gap caused and full before/after trace.
+
+- [ ] **Phase 16** - Animated window movement/size, and (building on
+      that) Hyprland-style animation `style` support (`slide`/`popin`/
+      `gnome` for windows - see `WindowAnimationController.cpp`). Not
+      started. Depends on Phase 14's primitives and Phase 15's `fill`
+      (which resolves the layout gap `popin` specifically would otherwise
+      hit - see Phase 14's own note, now resolved).
 
 ## Open questions
 
+- **Canvas damage tracking trusts `m_root->size()` to bound everything
+  actually drawn - not defended against yet.** Found live via the
+  `ALT+SHIFT+3` demo bug above: `CCanvas`'s damage boxes (`fullDamageBox()`,
+  the creation-time `damage()` call, and `CUIManager::removeCanvas()`'s
+  clear-on-close `damage()`) are ALL derived from `box()`, i.e. `m_size`,
+  which itself just mirrors `m_root->size()` (see the content-size sync in
+  `Canvas.cpp`'s `render()`). Nothing enforces that every descendant
+  actually renders WITHIN that box - it just normally happens to be true,
+  since layout derives child sizes from the parent's. The fill-only-
+  children degenerate case above broke that: `content` kept rendering its
+  own real, non-zero-sized children (`label`/`row`) at a shifted position,
+  while root's tracked `m_size` sat frozen at `(0, 0)` (root's
+  `measureContent()` had nothing left to size against once both its
+  children were excluded as `fill`). Because every damage call - at
+  creation AND at close - reads that same stuck `m_size`, NEITHER ever
+  covered the real drawn pixels: opening never validly damaged them in,
+  closing never validly cleared them out, leaving a stale on-screen ghost
+  after the window closed. The immediate trigger (a Stack with zero non-
+  `fill` children) is fixed live below. Two candidate fixes were weighed:
+    1. **Narrow (chosen, implemented - then found incomplete live by the
+       user, see below)** - in `CStackWidget::measureContent()`/
+       `CFlexWidget::measureContent()`, if excluding `fill` children would
+       leave zero children counted (i.e. there ARE children but ALL of
+       them are `fill`), fall back to counting them at their own pre-
+       stretch measured size instead of collapsing to `(0, 0)` - prevents
+       `m_size` from ever going impossibly small while real content
+       exists, matching what `setFill()`'s own doc comment already
+       promised ("nothing to stretch TO stays at its own natural size").
+       Shipped first without live-testing this specific scenario (flagged
+       as a caveat at the time) - the user then actually re-added `fill`
+       to `content` and hit a NEW regression: shrinking back via a SECOND
+       `ALT+SHIFT+4` press no longer sized `bg` back down. Root cause: the
+       fallback read a leaf `fill` child's (`bg`, `CRectNode`) CURRENT
+       `m_size` as its "pre-stretch" size - but a leaf's default
+       `measureContent()` was a pure no-op (see `Widget.hpp`), so `m_size`
+       was never actually pre-stretch, it was whatever the LAST
+       `arrangeChildren()` stretch left it at. The fallback ended up
+       reading `bg`'s previous "big" (400x250) stretched size right back
+       as if it were natural, keeping root - and so `bg` - pinned there
+       forever. This is the exact same sticky-growth bug class
+       `CStackWidget::measureContent()`'s fill-exclusion already fixes for
+       the NORMAL path, just re-introduced inside the fallback branch
+       itself. Actually fixed at the source instead of patched again: see
+       `CWidget::measureContent()`'s new default (`Widget.hpp`) below.
+    2. **General (not implemented)** - extend the SAME pattern
+       `renderDebug()` already uses for the debug overlay (returns the
+       union `CBox` of every pixel it actually drew, folded into
+       `fullDamageBox()` via `m_debugOverflow`) to the REAL `render()`
+       pass too, so `fullDamageBox()` is always provably big enough
+       regardless of why a size and its actual paint extent diverged.
+       Would close the whole bug class, but touches every `render()`
+       override's signature (`CRectNode`/`CTextNode`/`CImageNode`/
+       containers/Button/Input/Checkbox) to return what it drew, not just
+       `void` - judged disproportionate to a hazard the narrow fix already
+       closes for every currently-reachable case, left here as the
+       fallback if a new divergence ever surfaces some other way.
 - **Widget composability (Phase 9) - unsolved.** Storing a constructed
   widget in a Lua variable and reusing that variable currently reuses the
   *same instance*, not a fresh tree per use - no component/template

@@ -37,6 +37,43 @@ namespace HyprLUI {
                 if (m_onSizeChanged)
                     m_onSizeChanged(m_size);
             }
+
+            // Root-fills-canvas (Phase 15, DESIGN.md) - if the root widget
+            // wants to fill its window (CWidget::fill()) and THIS axis has
+            // a determinate size (an explicit w/h from hyprlui.window() or
+            // set_canvas_size(), i.e. m_fixedW/H is set), force the root's
+            // just-measured size on that axis to match m_size (this
+            // canvas's own just-settled size from the sync above) instead
+            // of leaving it at whatever it naturally measured. An axis
+            // left auto-sized has nothing determinate to fill and stays
+            // untouched - same inherent limitation CSS stretch has against
+            // an "auto" parent. Runs AFTER the sync above specifically so
+            // it reads m_size's SETTLED value, not a stale one from a
+            // previous frame.
+            //
+            // A leaf root (Box/Image/etc, not a container) used to have a
+            // narrower version of the sticky-growth hazard CStackWidget::
+            // measureContent()/CFlexWidget::measureContent()'s doc
+            // comments describe for a fill CHILD - toggling the CANVAS
+            // itself from an explicit size back to nil/auto wouldn't
+            // shrink a leaf root back down, since nothing reset its size
+            // once this override stopped running. Closed as a side effect
+            // of CWidget::measureContent()'s default (Widget.hpp), which
+            // now resets every leaf to its own natural size every frame
+            // the same way a container already recomputed from children -
+            // this override still runs first each frame regardless
+            // (unconditionally, whenever m_root->fill() is set), so a
+            // fixed-size canvas keeps overriding a leaf root exactly as
+            // before; only the auto/nil case changed, from "stuck" to
+            // "correctly falls back to natural size."
+            if (m_root->fill()) {
+                Vector2D size = m_root->size();
+                if (m_fixedW)
+                    size.x = m_size.x;
+                if (m_fixedH)
+                    size.y = m_size.y;
+                m_root->setSize(size);
+            }
         }
 
         // Anchor tracking (if any) is re-resolved every frame too - cheap
@@ -205,6 +242,21 @@ namespace HyprLUI {
         gfx::damageBox(oldBox);
         damage();
         return true;
+    }
+
+    void CCanvas::moveTo(const Vector2D& position) {
+        clearAnchor();
+
+        if (position.x == m_position.x && position.y == m_position.y)
+            return;
+
+        // Same old+new damage dance as recomputeAnchorPosition() above -
+        // see its own comment for why a plain damage() after moving isn't
+        // enough on its own.
+        const auto oldBox = fullDamageBox();
+        m_position        = position;
+        gfx::damageBox(oldBox);
+        damage();
     }
 
 } // namespace HyprLUI

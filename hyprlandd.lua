@@ -1074,10 +1074,10 @@ hl.bind("ALT + SHIFT + T", function()
 					hl.plugin.hyprlui.Box({ id = "fade_box", w = 160, h = 80, color = 0xffcc8833, rounding = 8 }),
 					-- Per-widget override (Phase 13 follow-up) - noticeably
 					-- slower (1.2s vs the global 0.3s) and a different
-					-- curve, so toggling both boxes together with the SAME
-					-- keybind makes the override visibly obvious rather
-					-- than needing a separate bind to prove it does
-					-- anything.
+					-- bezier, so toggling both boxes together with the
+					-- SAME keybind makes the override visibly obvious
+					-- rather than needing a separate bind to prove it
+					-- does anything.
 					hl.plugin.hyprlui.Box({
 						id = "fade_box_custom",
 						w = 160,
@@ -1135,6 +1135,231 @@ hl.bind("ALT + SHIFT + Q", function()
 		hyprluiWarn("hyprlui.remove_widget", err)
 	end
 end, { description = "HyprLUI: fade-then-remove the test box for good" })
+
+-- ALT + SHIFT + L: toggle set_canvas_position() on/off - the fade window
+-- was created with anchor="center", so the FIRST press clears that anchor
+-- (see CCanvas::clearAnchor()'s doc comment) and explicitly moves it;
+-- pressing again moves it back to where it originally was (still no
+-- anchor from here on - this doesn't restore it).
+local hyprluiFadeWindowMoved = false
+hl.bind("ALT + SHIFT + L", function()
+	if not hyprluiFadeWindowOpen then
+		return
+	end
+	hyprluiFadeWindowMoved = not hyprluiFadeWindowMoved
+	local ok, err =
+		pcall(hl.plugin.hyprlui.set_canvas_position, HYPRLUI_FADE_WINDOW, hyprluiFadeWindowMoved and 400 or 0, 60)
+	if not ok then
+		hyprluiWarn("hyprlui.set_canvas_position", err)
+	end
+end, { description = "HyprLUI: explicitly reposition the fade test window" })
+
+-- ALT + SHIFT + 1: toggle set_canvas_size() - pins the window to a fixed
+-- 400x200 box (bigger than its natural content, so the extra space is
+-- plainly visible) or lets it size-to-content again (nil/nil).
+local hyprluiFadeWindowFixedSize = false
+hl.bind("ALT + SHIFT + 1", function()
+	if not hyprluiFadeWindowOpen then
+		return
+	end
+	hyprluiFadeWindowFixedSize = not hyprluiFadeWindowFixedSize
+	local ok, err
+	if hyprluiFadeWindowFixedSize then
+		ok, err = pcall(hl.plugin.hyprlui.set_canvas_size, HYPRLUI_FADE_WINDOW, 400, 200)
+	else
+		ok, err = pcall(hl.plugin.hyprlui.set_canvas_size, HYPRLUI_FADE_WINDOW, nil, nil)
+	end
+	if not ok then
+		hyprluiWarn("hyprlui.set_canvas_size", err)
+	end
+end, { description = "HyprLUI: toggle a fixed size on the fade test window" })
+
+-- ALT + SHIFT + 2: toggle set_widget_size() - resizes just "fade_box"
+-- (normally 160x80) to a bigger 240x80, one level down from
+-- set_canvas_size() above. Note this grows the BOX itself since it's a
+-- plain solid-color rect (nothing inside it to fail to stretch) - a
+-- container widget with fixed-size children would show the same
+-- "content doesn't grow to fill" gap flagged in DESIGN.md's Phase 15 note.
+local hyprluiFadeBoxFixedSize = false
+hl.bind("ALT + SHIFT + 2", function()
+	if not hyprluiFadeWindowOpen then
+		return
+	end
+	hyprluiFadeBoxFixedSize = not hyprluiFadeBoxFixedSize
+	local ok, err
+	if hyprluiFadeBoxFixedSize then
+		ok, err = pcall(hl.plugin.hyprlui.set_widget_size, HYPRLUI_FADE_WINDOW, "fade_box", 240, 80)
+	else
+		ok, err = pcall(hl.plugin.hyprlui.set_widget_size, HYPRLUI_FADE_WINDOW, "fade_box", 160, 80)
+	end
+	if not ok then
+		hyprluiWarn("hyprlui.set_widget_size", err)
+	end
+end, { description = "HyprLUI: toggle a fixed size on the fade_box widget" })
+
+--------------------------------------------------
+---- HYPRLUI FILL TEST (Phase 15) ----
+--------------------------------------------------
+-- Exercises `fill` (DESIGN.md Phase 15) - "stretch to match my parent's
+-- available size" - across all three places it's interpreted: a Row's
+-- cross axis, a Stack's own full size, and a window's root widget vs its
+-- canvas. "grow_fill" below is only 20px tall on its own, but its Row
+-- sibling "short" is 60px - fill stretches it to match. "bg" fills the
+-- whole Stack behind the content. The root Stack itself has fill=true,
+-- so growing the WHOLE WINDOW via ALT+SHIFT+4 (set_canvas_size) grows
+-- "bg" (and everything else) right along with it, instead of the content
+-- just sitting in a corner of a bigger, mostly-empty window.
+--
+-- "content" is ALSO fill=true here (not just "bg") - deliberately: with
+-- BOTH of the root Stack's children marked fill, root has zero non-fill
+-- children to size itself from, which is the exact degenerate case
+-- CStackWidget::measureContent()'s fallback exists for (see its doc
+-- comment, ContainerWidget.cpp) - this keeps that fallback path, and the
+-- leaf self-correction it depends on (CWidget::primeNaturalSize(),
+-- Widget.hpp), under live regression coverage instead of only the common
+-- "one real sibling to size against" case. A real live bug (`bg` not
+-- shrinking back on a second ALT+SHIFT+4 press) was found through
+-- exactly this config - see DESIGN.md's Phase 15/Open Questions entries.
+
+local HYPRLUI_FILL_WINDOW = "hyprlui_fill_test"
+local hyprluiFillWindowOpen = false
+local hyprluiFillWindowBig = false
+
+-- ALT + SHIFT + 3: toggle the fill test window.
+hl.bind("ALT + SHIFT + 3", function()
+	if hyprluiFillWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_FILL_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiFillWindowOpen = false
+		hyprluiFillWindowBig = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = HYPRLUI_FILL_WINDOW,
+			x = 200,
+			y = 400,
+			hl.plugin.hyprlui.Stack({
+				id = "root",
+				debug = true,
+				fill = true, -- root-fills-canvas: matches the window's own size whenever set_canvas_size() below gives it one
+				-- w/h are still required at construction (a Box's w/h are
+				-- its actual dimensions, not an override, unlike
+				-- containers/Image) even though fill overrides them
+				-- immediately during arrange() - the exact values here
+				-- don't matter beyond satisfying that requirement.
+				hl.plugin.hyprlui.Box({ id = "bg", w = 1, h = 1, fill = true, color = 0xff222222, rounding = 8 }),
+				hl.plugin.hyprlui.Column({
+					id = "content",
+					x = 12,
+					y = 12,
+					gap = 8,
+					hl.plugin.hyprlui.Text({
+						id = "label",
+						text = "ALT+SHIFT+4 to grow the window",
+						size = 12,
+					}),
+					hl.plugin.hyprlui.Row({
+						id = "row",
+						gap = 8,
+						hl.plugin.hyprlui.Box({ id = "short", w = 60, h = 60, color = 0xffcc8833, rounding = 4 }),
+						hl.plugin.hyprlui.Box({
+							id = "grow_fill",
+							w = 60,
+							h = 20,
+							fill = true,
+							color = 0xff3388cc,
+							rounding = 4,
+						}),
+					}),
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.window", err)
+		return
+	end
+	hyprluiFillWindowOpen = true
+end, { description = "HyprLUI: toggle the fill test window" })
+
+-- ALT + SHIFT + 4: grow/shrink the fill test window - with "root"
+-- (the Stack) marked fill=true, "bg" (itself fill=true within that
+-- Stack) grows right along with the window instead of staying put.
+hl.bind("ALT + SHIFT + 4", function()
+	if not hyprluiFillWindowOpen then
+		return
+	end
+	hyprluiFillWindowBig = not hyprluiFillWindowBig
+	local ok, err
+	if hyprluiFillWindowBig then
+		ok, err = pcall(hl.plugin.hyprlui.set_canvas_size, HYPRLUI_FILL_WINDOW, 400, 250)
+	else
+		ok, err = pcall(hl.plugin.hyprlui.set_canvas_size, HYPRLUI_FILL_WINDOW, nil, nil)
+	end
+	if not ok then
+		hyprluiWarn("hyprlui.set_canvas_size", err)
+	end
+end, { description = "HyprLUI: grow/shrink the fill test window" })
+
+-- ALT + SHIFT + 5: toggle a Row-of-Columns "2x2 matrix" fill test - a
+-- DIFFERENT shape than the Stack test above, specifically to exercise
+-- `fill` NESTED two levels deep with two DIFFERENT cross axes in play at
+-- once (a Row's cross axis is height; a Column's cross axis is width):
+--   col_a (fill=true, a Row child) - col_a's own NATURAL height (from its
+--     own two boxes) is smaller than col_b's, so it stretches to match
+--     col_b's height (the row's cross axis).
+--   a2 (fill=true, a Column child, inside col_a) - a2's own w=20 is
+--     narrower than col_a's other box (a1, w=60), so it stretches to
+--     match col_a's width (the COLUMN's cross axis) - note this is
+--     col_a's width, unaffected by col_a's OWN height-fill above; the two
+--     fills are on perpendicular axes and don't interact.
+local HYPRLUI_MATRIX_WINDOW = "hyprlui_matrix_test"
+local hyprluiMatrixWindowOpen = false
+
+hl.bind("ALT + SHIFT + 5", function()
+	if hyprluiMatrixWindowOpen then
+		local ok, err = pcall(hl.plugin.hyprlui.remove_canvas, HYPRLUI_MATRIX_WINDOW)
+		if not ok then
+			hyprluiWarn("hyprlui.remove_canvas", err)
+		end
+		hyprluiMatrixWindowOpen = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = HYPRLUI_MATRIX_WINDOW,
+			x = 650,
+			y = 400,
+			hl.plugin.hyprlui.Row({
+				id = "root",
+				gap = 8,
+				hl.plugin.hyprlui.Column({
+					id = "col_a",
+					gap = 8,
+					fill = true,
+					hl.plugin.hyprlui.Box({ id = "a1", w = 60, h = 40, color = 0xffcc8833, rounding = 4 }),
+					hl.plugin.hyprlui.Box({ id = "a2", w = 20, h = 40, fill = true, color = 0xff3388cc, rounding = 4 }),
+				}),
+				hl.plugin.hyprlui.Column({
+					id = "col_b",
+					gap = 8,
+					hl.plugin.hyprlui.Box({ id = "b1", w = 80, h = 100, color = 0xff88cc33, rounding = 4 }),
+					hl.plugin.hyprlui.Box({ id = "b2", w = 80, h = 40, color = 0xffcc3388, rounding = 4 }),
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.window", err)
+		return
+	end
+	hyprluiMatrixWindowOpen = true
+end, { description = "HyprLUI: toggle the row-of-columns fill matrix test" })
 
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required

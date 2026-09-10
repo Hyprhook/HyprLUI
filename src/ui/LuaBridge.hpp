@@ -306,28 +306,59 @@
 //     HyprLUI weren't there.
 //
 //   animationIn, animationOut (Phase 13 follow-up)
-//     Optional tables ({ enabled?, speed?, bezier? } - same shape as
-//     hyprlui.animation()'s own table, minus `leaf`, which leaf this is
-//     is implied by which field it's under) overriding the GLOBAL
-//     hyprlui.animation({leaf="in"|"out", ...}) config for just this one
-//     widget. Self-contained, not a partial merge with the global config -
-//     a widget setting animationIn = { speed = 5 } does NOT inherit the
-//     global's bezier, it gets "default" unless it names its own.
-//     `enabled` defaults to true when the table is given at all;
-//     explicitly setting `enabled = false` forces this ONE widget's
-//     toggle to stay instant even if the global leaf is enabled elsewhere
-//     - `speed`/`bezier` are irrelevant and may be omitted in that case.
-//     A widget with neither field set (the common case) just follows
-//     whatever the global config for each leaf currently is, same as
-//     before this existed. Used identically regardless of WHY visibility
-//     is changing - an explicit set_widget_visible() call, this widget
-//     being removed via remove_widget(), or (if this is a window's root
-//     widget) the whole window opening via window() or closing via
-//     remove_canvas()/set_canvas_visible() - there is no separate
-//     creation/removal animation concept, just becoming visible or
-//     becoming hidden. Deliberately not named "fade" - opacity is the
-//     only thing actually animated today, but the mechanism itself is
-//     generic.
+//     Optional tables ({ enabled?, speed?, bezier?, spring? } - same
+//     shape as hyprlui.animation()'s own table, minus `leaf`, which leaf
+//     this is is implied by which field it's under) overriding the
+//     GLOBAL hyprlui.animation({leaf="in"|"out", ...}) config for just
+//     this one widget. Self-contained, not a partial merge with the
+//     global config - a widget setting animationIn = { speed = 5 } does
+//     NOT inherit the global's curve, it gets "default" unless it names
+//     its own. `enabled` defaults to true when the table is given at
+//     all; explicitly setting `enabled = false` forces this ONE widget's
+//     toggle to stay instant even if the global leaf is enabled
+//     elsewhere - `speed`/`bezier`/`spring` are irrelevant and may be
+//     omitted in that case. A widget with neither field set (the common
+//     case) just follows whatever the global config for each leaf
+//     currently is, same as before this existed. Used identically
+//     regardless of WHY visibility is changing - an explicit
+//     set_widget_visible() call, this widget being removed via
+//     remove_widget(), or (if this is a window's root widget) the whole
+//     window opening via window() or closing via remove_canvas()/
+//     set_canvas_visible() - there is no separate creation/removal
+//     animation concept, just becoming visible or becoming hidden.
+//     Deliberately not named "fade" - opacity is the only thing actually
+//     animated today, but the mechanism itself is generic.
+//
+//     `bezier`/`spring` both name a curve already registered process-
+//     wide (Animation::mgr(), shared with Hyprland's own window/
+//     workspace animations) - give at most one; `bezier` takes
+//     precedence if somehow both are given, matching hl.animation()'s
+//     own exact precedence. A spring must already exist via the user's
+//     own hl.curve({type="spring", name=..., ...}) - HyprLUI has no way
+//     to define a NEW spring itself, only reference one Hyprland (or the
+//     user's config) already registered.
+//
+//   fill (Phase 15, DESIGN.md)
+//     Boolean, default false. "Stretch to match my parent's available
+//     size instead of sizing myself from my own content" - CSS
+//     align-self: stretch, not flex-grow (no main-axis space
+//     distribution). Interpreted differently per parent:
+//       - Row/Column: stretches to the full CROSS-axis space (height for
+//         Row, width for Column); the main axis is untouched, still sized
+//         from this widget's own content.
+//       - Stack: matches the stack's own full size at position (0, 0),
+//         ignoring the stack's padding (Stack never interprets padding
+//         for any of its children, `fill` included).
+//       - A window's own root widget: matches its window's size, but only
+//         on axes where the window actually HAS a determinate size (an
+//         explicit w/h from window() or set_canvas_size()) - an
+//         auto-sized axis has nothing determinate to fill and is left
+//         untouched.
+//     A widget with no non-`fill` sibling/ancestor establishing a real
+//     size on some axis (e.g. a Stack whose only child is also `fill`, or
+//     a root widget in a fully auto-sized window) has nothing to stretch
+//     TO there and stays at its own natural size - expected, matches CSS
+//     stretch against an "auto" parent, not a bug.
 //
 // Composability (Phase 9, DESIGN.md):
 //
@@ -611,6 +642,22 @@
 //   set_canvas_visible(name, visible)
 //     Shows/hides a window without destroying its content.
 //
+//   set_canvas_position(name, x, y)
+//     Repositions an already-created window to an explicit global
+//     position. Clears any anchor the window was created with first - an
+//     explicit position and an anchor are mutually exclusive (same as
+//     window()'s own creation-time x/y-vs-anchor semantics: giving
+//     `anchor` means x/y are an offset, not a raw position, and there's
+//     no anchor left for that offset to be relative to once this runs).
+//     Instant - a prerequisite for eventually animating window movement
+//     (DESIGN.md's deferred "move" note), not that itself yet.
+//
+//   set_canvas_size(name, w, h)
+//     Resizes an already-created window - `w`/`h` pin that axis exactly
+//     like window()'s own w/h fields do; pass nil for either to let that
+//     axis size-to-content again instead. Instant, same as
+//     set_canvas_position() above.
+//
 //   set_widget_visible(window, id, visible)
 //     Shows/hides a single widget (and its subtree) within an existing
 //     window - same "toggle without destroying/recreating" idea as
@@ -626,6 +673,16 @@
 //     Runtime mutator for the `disabled` field above (Phase 10) - same
 //     "keep state honest" reasoning: disabling a currently-focused/
 //     hovered widget blurs/un-hovers it first.
+//
+//   set_widget_size(window, id, w, h) (Phase 14 follow-up)
+//     Resizes a single widget - `w`/`h` pin that axis exactly like the
+//     widget's own constructor-time w/h override does; pass nil for
+//     either to let that axis size-to-content again instead. Runtime
+//     mutator for the same mechanism every fixed-size-capable widget
+//     (containers, Image) already exposes at construction, one level down
+//     from set_canvas_size(). Does NOT make this widget's CONTENT visibly
+//     grow/shrink to match on its own - see Phase 15's own note in
+//     DESIGN.md about that same gap at the canvas level.
 //
 //   set_text(window, id, text)
 //     Updates an existing Text widget's content in place.

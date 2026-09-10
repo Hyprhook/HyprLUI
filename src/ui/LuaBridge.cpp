@@ -168,14 +168,60 @@ namespace HyprLUI::Lua {
             return parseColorField(L, idx, key, CHyprColor{}, fnName);
         }
 
+        // Resolves EITHER a `bezier` or `spring` field on the table at
+        // `idx`, mirroring Hyprland's own hl.animation()'s exact
+        // precedence (bezier checked first, falling back to spring only
+        // if bezier isn't given) and encoding: a chosen spring becomes
+        // the string "spring:<name>" - the SAME internalBezier field a
+        // plain bezier name would use (confirmed by reading Hyprland's
+        // own hlAnimation(), LuaBindingsConfigRules.cpp:
+        // `curveName = std::format("spring:{}", springName)`).
+        // Hyprland's own CBaseAnimatedVariable recognizes that prefix
+        // internally when actually consuming a curve, so HyprLUI never
+        // has to interpret it itself - this is a plain pass-through, same
+        // as a bezier name always was. Springs are registered process-
+        // wide the same way beziers are (Animation::mgr()->
+        // addSpringWithName(), via the user's own hl.curve({type=
+        // "spring", ...}) calls), so a spring a user already defined for
+        // window animations is reusable here by name, same as a bezier.
+        // Falls back to plain bezier "default" if NEITHER is given -
+        // unlike hl.animation()'s own stricter requirement (errors if
+        // neither is given), kept lenient to match this project's
+        // already-established default.
+        std::string resolveCurveField(lua_State* L, int idx, const std::string& errPrefix) {
+            lua_getfield(L, idx, "bezier");
+            const bool hasBezier = !lua_isnil(L, -1);
+            lua_pop(L, 1);
+
+            if (hasBezier) {
+                const auto bezier = optFieldString(L, idx, "bezier", "default");
+                if (!Animation::mgr()->bezierExists(bezier))
+                    luaL_error(L, "%s: no such bezier \"%s\"", errPrefix.c_str(), bezier.c_str());
+                return bezier;
+            }
+
+            lua_getfield(L, idx, "spring");
+            const bool hasSpring = !lua_isnil(L, -1);
+            lua_pop(L, 1);
+
+            if (hasSpring) {
+                const auto spring = optFieldString(L, idx, "spring", "");
+                if (!Animation::mgr()->springExists(spring))
+                    luaL_error(L, "%s: no such spring \"%s\"", errPrefix.c_str(), spring.c_str());
+                return "spring:" + spring;
+            }
+
+            return "default";
+        }
+
         // Phase 13 follow-up: a widget's own `animationIn`/`animationOut`
         // field (see buildWidget()'s common tail) - a per-widget override
         // of hyprlui.animation()'s global "in"/"out" config, self-
         // contained like the global one's own table shape (leaf implied
         // by which field this is), not a partial merge with it. Returns
         // nullptr if the field isn't present at all (the common case -
-        // "use the global config for this widget"). `speed`/`bezier` are
-        // only required when the table doesn't explicitly set `enabled =
+        // "use the global config for this widget"). `speed` is only
+        // required when the table doesn't explicitly set `enabled =
         // false` - same conditional-requirement shape as hl.animation()/
         // hyprlui.animation() themselves.
         SP<Hyprutils::Animation::SAnimationPropertyConfig> optAnimationOverrideField(lua_State* L, int idx, const char* key, const char* fnName) {
@@ -197,10 +243,8 @@ namespace HyprLUI::Lua {
                 const double speed = requireFieldNumber(L, tblIdx, "speed", fnName);
                 if (speed <= 0)
                     luaL_error(L, "%s: field '%s': speed must be greater than 0", fnName, key);
-                const auto bezier = optFieldString(L, tblIdx, "bezier", "default");
-                if (!Animation::mgr()->bezierExists(bezier))
-                    luaL_error(L, "%s: field '%s': no such bezier \"%s\"", fnName, key, bezier.c_str());
-                cfg = makeAnimationConfig(true, static_cast<float>(speed), bezier);
+                const auto curve = resolveCurveField(L, tblIdx, std::string(fnName) + ": field '" + key + "'");
+                cfg              = makeAnimationConfig(true, static_cast<float>(speed), curve);
             }
 
             lua_pop(L, 1); // the animationIn/animationOut table itself
@@ -754,6 +798,21 @@ namespace HyprLUI::Lua {
             if (type == "stack" || type == "row" || type == "column" || type == "image")
                 widget->setFixedSize(optFixedField(L, idx, "w"), optFixedField(L, idx, "h"));
 
+            // Cross-axis stretch (Phase 15, DESIGN.md) - generic like
+            // disabled/hoverColor/etc. above, parsed for every widget type
+            // (not just containers), since ANY widget can be a Row/
+            // Column/Stack child, or a window's own root widget.
+            widget->setFill(optFieldBool(L, idx, "fill", false));
+
+            // Snapshot this widget's own just-finished size as its natural/
+            // intrinsic content size (CWidget::primeNaturalSize()) - has to
+            // run AFTER every size-affecting step above (type-specific
+            // construction, the fixed-size override block), so a leaf's
+            // default measureContent() has the right value to self-correct
+            // to every frame regardless of any later `fill` stretch. See
+            // primeNaturalSize()'s own doc comment.
+            widget->primeNaturalSize();
+
             // Children: positional (ipairs-style) table entries.
             const auto n = lua_rawlen(L, idx);
             for (lua_Integer i = 1; i <= static_cast<lua_Integer>(n); ++i) {
@@ -1023,6 +1082,57 @@ namespace HyprLUI::Lua {
             return 0;
         }
 
+        // Repositions an already-created window to an explicit global
+        // position - clears any anchor first (an explicit position and an
+        // anchor are mutually exclusive, see CCanvas::clearAnchor()'s doc
+        // comment), so calling this on an anchored window makes it stop
+        // tracking that anchor from here on. Prerequisite groundwork for
+        // animatable window position (DESIGN.md's deferred "move" note,
+        // and eventually Hyprland-style animation `style`s like "slide") -
+        // this itself is instant, same as every other mutation before it
+        // got an optional animated path (see set_widget_visible()'s own
+        // history, Phase 2 -> Phase 13).
+        int luaSetCanvasPosition(lua_State* L) {
+            const std::string name = luaL_checkstring(L, 1);
+            const double      x    = luaL_checknumber(L, 2);
+            const double      y    = luaL_checknumber(L, 3);
+
+            auto              canvas = CUIManager::get().getCanvas(name);
+            if (!canvas)
+                return luaL_error(L, "hyprlui.set_canvas_position: no window named '%s'", name.c_str());
+
+            canvas->moveTo({x, y});
+            return 0;
+        }
+
+        // Resizes an already-created window - `w`/`h` pin that axis
+        // exactly like hyprlui.window()'s own w/h fields do (see
+        // CWidget::setFixedSize()'s doc comment); pass nil for either to
+        // let THAT axis size-to-content again instead. No explicit
+        // damage() call needed here - CCanvas::render()'s existing
+        // content-size sync (which already runs every frame regardless of
+        // WHY m_fixedW/H changed) picks this up and damages the old/new
+        // footprint correctly on the very next frame.
+        int luaSetCanvasSize(lua_State* L) {
+            const std::string name = luaL_checkstring(L, 1);
+
+            auto              canvas = CUIManager::get().getCanvas(name);
+            if (!canvas)
+                return luaL_error(L, "hyprlui.set_canvas_size: no window named '%s'", name.c_str());
+
+            std::optional<double> w, h;
+            if (!lua_isnil(L, 2))
+                w = luaL_checknumber(L, 2);
+            if (!lua_isnil(L, 3))
+                h = luaL_checknumber(L, 3);
+
+            if ((w && *w <= 0) || (h && *h <= 0))
+                return luaL_error(L, "hyprlui.set_canvas_size: w/h must be greater than 0");
+
+            canvas->setFixedSize(w, h);
+            return 0;
+        }
+
         int luaSetText(lua_State* L) {
             const std::string canvasName = luaL_checkstring(L, 1);
             const std::string id         = luaL_checkstring(L, 2);
@@ -1098,6 +1208,47 @@ namespace HyprLUI::Lua {
             }
 
             widget->setDisabled(disabled);
+            canvas->damage();
+            return 0;
+        }
+
+        // Resizes a single widget within an existing window - `w`/`h` pin
+        // that axis exactly like the widget's own constructor-time w/h
+        // override does (see CWidget::setFixedSize()'s doc comment); pass
+        // nil for either to let THAT axis size-to-content again instead.
+        // Runtime mutator for the same mechanism every fixed-size-capable
+        // widget (containers, Image) already exposes at construction -
+        // this is just the ability to change it afterward, mirroring
+        // hyprlui.set_canvas_size() one level down. A single explicit
+        // canvas->damage() call covers it regardless of whether this
+        // widget's resize changes the WHOLE window's own measured size or
+        // not: if it doesn't, the resized widget still lives within the
+        // window's existing box, already covered; if it does,
+        // CCanvas::render()'s own content-size sync picks up the wider
+        // change and damages the new region too, same as any other
+        // widget mutation that happens to grow/shrink the window.
+        int luaSetWidgetSize(lua_State* L) {
+            const std::string canvasName = luaL_checkstring(L, 1);
+            const std::string id         = luaL_checkstring(L, 2);
+
+            auto              canvas = CUIManager::get().getCanvas(canvasName);
+            if (!canvas || !canvas->root())
+                return luaL_error(L, "hyprlui.set_widget_size: no window named '%s'", canvasName.c_str());
+
+            auto* widget = canvas->root()->findWidget(id);
+            if (!widget)
+                return luaL_error(L, "hyprlui.set_widget_size: no widget '%s' in window '%s'", id.c_str(), canvasName.c_str());
+
+            std::optional<double> w, h;
+            if (!lua_isnil(L, 3))
+                w = luaL_checknumber(L, 3);
+            if (!lua_isnil(L, 4))
+                h = luaL_checknumber(L, 4);
+
+            if ((w && *w <= 0) || (h && *h <= 0))
+                return luaL_error(L, "hyprlui.set_widget_size: w/h must be greater than 0");
+
+            widget->setFixedSize(w, h);
             canvas->damage();
             return 0;
         }
@@ -1379,11 +1530,9 @@ namespace HyprLUI::Lua {
             if (speed <= 0)
                 return luaL_error(L, "hyprlui.animation(\"%s\"): speed must be greater than 0", leaf.c_str());
 
-            const auto bezier = optFieldString(L, 1, "bezier", "default");
-            if (!Animation::mgr()->bezierExists(bezier))
-                return luaL_error(L, R"(hyprlui.animation("%s"): no such bezier "%s")", leaf.c_str(), bezier.c_str());
+            const auto curve = resolveCurveField(L, 1, "hyprlui.animation(\"" + leaf + "\")");
 
-            CWidgetAnimations::get().configure(kind, true, static_cast<float>(speed), bezier);
+            CWidgetAnimations::get().configure(kind, true, static_cast<float>(speed), curve);
             return 0;
         }
 
@@ -1461,8 +1610,11 @@ namespace HyprLUI::Lua {
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "window", &luaWindow);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "remove_canvas", &luaRemoveCanvas);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_canvas_visible", &luaSetCanvasVisible);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_canvas_position", &luaSetCanvasPosition);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_canvas_size", &luaSetCanvasSize);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_widget_visible", &luaSetWidgetVisible);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_widget_disabled", &luaSetWidgetDisabled);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_widget_size", &luaSetWidgetSize);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_text", &luaSetText);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_input_text", &luaSetInputText);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "get_input_text", &luaGetInputText);
@@ -1497,8 +1649,11 @@ namespace HyprLUI::Lua {
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "window");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "remove_canvas");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_canvas_visible");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_canvas_position");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_canvas_size");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_widget_visible");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_widget_disabled");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_widget_size");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_text");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_input_text");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "get_input_text");

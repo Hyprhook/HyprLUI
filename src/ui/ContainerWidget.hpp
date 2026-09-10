@@ -30,6 +30,14 @@ namespace HyprLUI {
 
       protected:
         void measureContent() override;
+        // Phase 15's `fill` (see CWidget::setFill()'s doc comment) is the
+        // ONE thing CStackWidget's arrangeChildren() actually does - a
+        // `fill` child is resized to the stack's own full m_size at
+        // position (0, 0), ignoring padding (consistent with this
+        // class's own established "no padding interpretation" design, see
+        // the file header comment). A non-`fill` child is untouched, same
+        // as the base no-op default every other widget type still uses.
+        void arrangeChildren() override;
     };
 
     enum class EFlexDirection {

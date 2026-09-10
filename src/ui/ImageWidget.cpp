@@ -28,6 +28,14 @@ namespace HyprLUI {
         m_texture = gfx::makeImageTexture(m_path);
         if (m_texture)
             m_size = m_texture->m_size;
+
+        // Keep the base class's default measureContent() (Widget.hpp) in
+        // sync - Image is the one leaf type whose natural/intrinsic size
+        // can legitimately change AFTER construction (setImage() decoding
+        // a differently-sized texture), so the one-time primeNaturalSize()
+        // call buildWidget() makes at construction (LuaBridge.cpp) isn't
+        // enough on its own here, unlike every other leaf type.
+        primeNaturalSize();
     }
 
 } // namespace HyprLUI
