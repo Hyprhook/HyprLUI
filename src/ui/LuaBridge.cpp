@@ -10,6 +10,7 @@
 #include "ComponentRegistry.hpp"
 #include "../reactive/Watcher.hpp"
 #include "../reserved/ReservedAreaComposer.hpp"
+#include "../persistence/PersistenceStore.hpp"
 
 #include <hyprland/src/helpers/Color.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
@@ -31,6 +32,7 @@ extern "C" {
 #include <memory>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <unordered_set>
 #include <vector>
 
@@ -1179,6 +1181,72 @@ namespace HyprLUI::Lua {
             return 0;
         }
 
+        // Phase 11 (DESIGN.md) - reads a number/string/boolean argument at
+        // `idx` for hyprlui.persistent()/its wrapper's :set(). Uses
+        // lua_type() (exact tag), NOT lua_isnumber()/lua_isstring() -
+        // those two are coercion-aware in the Lua C API (a numeric-
+        // looking string like "123" satisfies lua_isnumber() too), which
+        // would silently misclassify a string default/value as a number.
+        PersistentValue readPersistentValueArg(lua_State* L, int idx, const char* fnName) {
+            switch (lua_type(L, idx)) {
+                case LUA_TBOOLEAN: return static_cast<bool>(lua_toboolean(L, idx));
+                case LUA_TNUMBER: return static_cast<double>(lua_tonumber(L, idx));
+                case LUA_TSTRING: return std::string(lua_tostring(L, idx));
+                default: luaL_error(L, "%s: value must be a number, string, or boolean", fnName); return false; // unreachable
+            }
+        }
+
+        void pushPersistentValue(lua_State* L, const PersistentValue& val) {
+            std::visit(
+                [L](auto&& v) {
+                    using T = std::decay_t<decltype(v)>;
+                    if constexpr (std::is_same_v<T, double>)
+                        lua_pushnumber(L, v);
+                    else if constexpr (std::is_same_v<T, std::string>)
+                        lua_pushlstring(L, v.data(), v.size());
+                    else if constexpr (std::is_same_v<T, bool>)
+                        lua_pushboolean(L, v);
+                },
+                val);
+        }
+
+        // Both `key` upvalues below are set via lua_pushcclosure() at the
+        // table-construction site in luaPersistent() - `store:get()`/
+        // `store:set(v)`'s Lua `:` sugar passes `store` itself as arg 1,
+        // which these ignore entirely (the actual key lives in the
+        // closure's upvalue, not in any argument).
+        int luaPersistentGet(lua_State* L) {
+            const std::string key = lua_tostring(L, lua_upvalueindex(1));
+            pushPersistentValue(L, CPersistenceStore::get().getRaw(key));
+            return 1;
+        }
+
+        int luaPersistentSet(lua_State* L) {
+            const std::string key   = lua_tostring(L, lua_upvalueindex(1));
+            const auto        value = readPersistentValueArg(L, 2, "hyprlui.persistent:set");
+            CPersistenceStore::get().set(key, value);
+            return 0;
+        }
+
+        int luaPersistent(lua_State* L) {
+            const std::string key = luaL_checkstring(L, 1);
+            const auto        def = readPersistentValueArg(L, 2, "hyprlui.persistent");
+            CPersistenceStore::get().getOrInit(key, def); // seeds it if absent, warns (not errors) on a stored-type mismatch otherwise
+
+            lua_newtable(L);
+            const int tblIdx = lua_gettop(L);
+
+            lua_pushstring(L, key.c_str());
+            lua_pushcclosure(L, luaPersistentGet, 1);
+            lua_setfield(L, tblIdx, "get");
+
+            lua_pushstring(L, key.c_str());
+            lua_pushcclosure(L, luaPersistentSet, 1);
+            lua_setfield(L, tblIdx, "set");
+
+            return 1;
+        }
+
         int luaFocusWidget(lua_State* L) {
             const std::string canvasName = luaL_checkstring(L, 1);
             const std::string id         = luaL_checkstring(L, 2);
@@ -1264,6 +1332,7 @@ namespace HyprLUI::Lua {
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "remove_widget", &luaRemoveWidget);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "watch", &luaWatch);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "notify", &luaNotify);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "persistent", &luaPersistent);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "focus_widget", &luaFocusWidget);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "blur_widget", &luaBlurWidget);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "defineComponent", &luaDefineComponent);
@@ -1296,6 +1365,7 @@ namespace HyprLUI::Lua {
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "remove_widget");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "watch");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "notify");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "persistent");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "focus_widget");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "blur_widget");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "defineComponent");

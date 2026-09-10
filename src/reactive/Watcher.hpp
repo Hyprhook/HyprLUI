@@ -40,15 +40,25 @@ namespace HyprLUI {
       public:
         static CWatcherManager& get();
 
-        // `L` is the Lua state to call `fnRef` on - Hyprland's Lua config
-        // runs in a single persistent lua_State for the compositor's
-        // whole lifetime (never per-call sandboxes), same assumption
-        // hl.timer() itself makes. `fnRef` is a LUA_REGISTRYINDEX
-        // reference (luaL_ref) to the watcher function - caller creates
-        // it, this class owns releasing it (see clear()). `intervalMs`,
-        // if given, arms a repeating timer that also calls notify() on
-        // that cadence. luaL_errors (never returns) if `name` is already
-        // registered.
+        // `L` is the Lua state to call `fnRef` on. **Correction (Phase
+        // 11, DESIGN.md)**: this comment used to claim Hyprland's Lua
+        // config "runs in a single persistent lua_State for the
+        // compositor's whole lifetime" - verified false while
+        // implementing hyprlui.persistent(): CConfigManager::reload()
+        // unconditionally calls reinitLuaState() on EVERY reload, which
+        // does lua_close(m_lua) then m_lua = luaL_newstate() - a
+        // genuinely fresh interpreter each time, not the same one kept
+        // alive. This class gets away with holding `L`/`fnRef` across a
+        // reload anyway ONLY because clear() runs on config.preReload
+        // (see registerHooks() in main.cpp), which fires strictly BEFORE
+        // reinitLuaState() destroys the old state - every ref this class
+        // holds is released while it's still valid, so nothing here ever
+        // ends up dereferencing a dangling one into a freed interpreter.
+        // `fnRef` is a LUA_REGISTRYINDEX reference (luaL_ref) to the
+        // watcher function - caller creates it, this class owns releasing
+        // it (see clear()). `intervalMs`, if given, arms a repeating
+        // timer that also calls notify() on that cadence. luaL_errors
+        // (never returns) if `name` is already registered.
         void registerWatcher(lua_State* L, const std::string& name, int fnRef, std::optional<int> intervalMs);
 
         // Re-invokes the watcher's function now and updates its cached

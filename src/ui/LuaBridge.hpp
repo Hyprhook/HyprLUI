@@ -438,6 +438,42 @@
 //     Errors if `name` isn't a registered watcher yet at the point the
 //     window{} using it gets built - watch() must run first.
 //
+// Persistence (Phase 11, DESIGN.md):
+//
+//   persistent(key, default)
+//     Returns a wrapper table (with :get()/:set(value) methods, see
+//     below) backed by a native C++ store that survives a Lua config
+//     reload - unlike an ordinary `local`, which resets to its initial
+//     value every time, since the WHOLE config script (including every
+//     top-level `local`) gets fully re-run on every reload. Scope,
+//     decided explicitly: survives a config reload (the plugin process
+//     keeps running) but NOT a full plugin unload or Hyprland restart -
+//     a pure in-memory store, not a file. `default` may be a number,
+//     string, or boolean (that's the whole supported set - no tables,
+//     no functions) - it's only ever actually used the FIRST time `key`
+//     has never been seen before; every later persistent() call for the
+//     same `key` (e.g. after a reload re-runs this same line) returns
+//     whatever's already stored, ignoring `default` entirely - if its
+//     type doesn't match what's already stored, that's logged as a
+//     warning (not an error - permissive) but still doesn't overwrite
+//     anything.
+//
+//     store:get() reads the CURRENT value (always live - not a snapshot
+//     taken when persistent() was called); store:set(value) overwrites
+//     it, including changing its type freely (this is exactly the write
+//     path a config author uses to keep the store in sync with whatever
+//     changed, e.g. after a volume-changed event). Deliberately explicit
+//     methods, not a mutable `.value` field - this project has
+//     consistently avoided `__index`/`__newindex` metatable magic
+//     elsewhere (Phase 3's reactivity, Phase 9's components) in favor of
+//     explicit calls, same reasoning here.
+//
+//     Example:
+//       local vol = hyprlui.persistent("volume", 50)
+//       print(vol:get())      -- 50 the first time ever run; whatever was
+//                             -- last set() otherwise, even across a reload
+//       vol:set(vol:get() + 5)
+//
 // Window construction and mutation:
 //
 //   window{ name, x = 0, y = 0, w, h, zorder = "overlay"|"background",

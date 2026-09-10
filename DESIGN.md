@@ -1639,30 +1639,103 @@ piece (raw-keysym limitation).
       former `CButtonWidget` branch was removed entirely - Button now
       falls through to the same generic `widget->fireClick()` every other
       widget type uses.
-- [ ] **Phase 11** - Persistence and native services architecture. Two
-      separate pieces:
-      1. **A persistent-variable wrapper to survive Hyprland config
-         reloads**: an explicit `persistent(key, default)`-style Lua
-         function returning a wrapper table, backed by a native C++ key-
-         value store that survives Lua script re-execution - because the
-         same config file drives both Hyprland and HyprLUI and gets fully
-         rerun on every reload. This is a concrete building block toward
-         the still-open "Config-reload state handling is a mitigation, not
-         a real design" question below - specifically for state a user
-         explicitly wants to *keep* across a reload, as distinct from
-         declaratively-recreated UI that's fine to lose.
-      2. **A native services layer exposing exactly two generic Lua
-         primitives**: run a command, and open a raw socket. Every higher-
-         level integration - D-Bus, JSON parsing, any specific protocol -
-         gets built in pure Lua on top of those two primitives rather than
-         natively in C++, keeping the native surface area deliberately
-         small. A second, separate community repository is also planned to
-         host shareable Lua-built widgets/integrations, kept apart from
-         core on purpose to avoid the maintenance burden seen in projects
-         like Waybar.
-- [ ] **Phase 12** (stretch) - Fade animations via Hyprland's animation
+- [x] **Phase 11** - Persistence: `hyprlui.persistent(key, default)`,
+      backed by a native C++ store that survives a Lua config reload -
+      unlike an ordinary `local`, which resets every time, since the
+      WHOLE config script re-runs on every reload. Split out from the
+      original combined "Phase 11" (persistence + native services) once
+      it became clear the two are genuinely independent pieces of work
+      that don't need to land together.
+
+      **A wrong initial assumption, caught by verifying against Hyprland's
+      source before implementing** (same practice as every internal-API-
+      reliant phase - this one paid off immediately): the first mental
+      model was "the same `lua_State` persists across a reload, so
+      `persistent()` could just keep a `LUA_REGISTRYINDEX` ref into it -
+      no native re-encoding needed, any Lua value type for free." Reading
+      `CConfigManager::reload()` disproved this directly:
+      `reinitLuaState()` runs unconditionally on EVERY reload and does
+      `lua_close(m_lua)` then `m_lua = luaL_newstate()` - the entire
+      interpreter, registry included, is destroyed and a genuinely fresh
+      one created each time. There is no "the persistent state" to hold a
+      ref into across that boundary. This also exposed an EXISTING, wrong
+      doc comment in `Watcher.hpp` (from Phase 3) claiming exactly the
+      disproven assumption - corrected in place: `CWatcherManager` was
+      never actually relying on state surviving a reload, it just happens
+      to be safe regardless, because `clear()` releases every Lua ref it
+      holds on `config.preReload`, which fires strictly before the old
+      state is destroyed - so nothing there was ever at risk of
+      dereferencing a dangling ref into a freed interpreter, for a
+      different reason than the comment gave.
+
+      **Scope decisions, all asked explicitly given how much the above
+      changed the actual implementation cost**:
+      - Durability: survives a config reload (the plugin process keeps
+        running), NOT a full plugin unload or Hyprland restart - a pure
+        in-memory store (`std::unordered_map<std::string,
+        PersistentValue>`), no disk I/O, no file-location/serialization-
+        format questions to answer.
+      - Value types: `PersistentValue = std::variant<double, std::string,
+        bool>` - scalars only, no tables/functions. Covers the realistic
+        use case (a volume level, a theme name, a toggle) without a
+        recursive Lua<->native conversion layer.
+      - Wrapper API: explicit `:get()`/`:set(value)` methods, not a
+        mutable `.value` field - consistent with this project's
+        repeatedly-stated preference for explicit calls over
+        `__index`/`__newindex` metatable magic (Phase 3's reactivity,
+        Phase 9's components both made the same call).
+      - Type mismatch on re-declaration (calling `persistent(key,
+        default)` again for an existing `key` whose stored value's type
+        differs from this call's `default`): logs a warning (`Log::WARN`,
+        not `luaL_error`) but stays permissive either way - always
+        returns whatever's actually stored, `default` is only ever
+        consulted the very first time nothing was stored yet.
+
+      New `src/persistence/PersistenceStore.hpp/.cpp` (`CPersistenceStore`
+      singleton, first widget-unrelated top-level subsystem directory,
+      alongside `src/reactive/`/`src/reserved/`/`src/input/`/`src/render/`/
+      `src/ui/`) - `getOrInit()` (used by `persistent()` itself: seeds or
+      warns-and-returns-existing), `getRaw()` (used by the wrapper's
+      `:get()` - a plain lookup, no default/warning logic, since
+      `getOrInit()` already handled that once at `persistent()`-call
+      time), `set()` (used by `:set()` - overwrites unconditionally,
+      including a type change, on the theory that an explicit `:set()`
+      call is always deliberate, unlike a `default` argument that might
+      just be stale). **`clear()` is the one piece of state in this
+      entire codebase that must NEVER be wired into `resetAllState()`/
+      `config.preReload`** - every other manager's whole reason for
+      having a `clear()` is to get wiped exactly there; this one's whole
+      reason to exist is to survive it. Called only from `PLUGIN_EXIT`, a
+      real unload - flagged explicitly in the header comment as a trap
+      not to "fix" by matching the other managers' pattern.
+
+      Lua-side implementation detail: the wrapper table's `get`/`set`
+      fields are C closures created via `lua_pushcclosure()` with the
+      `key` string as their one upvalue (`lua_upvalueindex(1)`) - `:`
+      method-call sugar (`store:get()`) passes `store` itself as the
+      closure's first ARGUMENT, which both closures simply ignore, since
+      the actual key lookup comes from the upvalue, not any argument.
+      Reading a number/string/boolean argument uses `lua_type()` (the
+      exact type tag), deliberately NOT `lua_isnumber()`/`lua_isstring()`
+      - those two are coercion-aware in the Lua C API (a numeric-looking
+      string like `"123"` satisfies `lua_isnumber()` too), which would
+      have silently misclassified a string `default`/`:set()` value as a
+      number.
+- [ ] **Phase 12** - Native services layer. Split out from the same
+      original "Phase 11" as its own phase, for the same reason. Exposes
+      exactly two generic Lua primitives: run a command, and open a raw
+      socket. Every higher-level integration - D-Bus, JSON parsing, any
+      specific protocol - gets built in pure Lua on top of those two
+      primitives rather than natively in C++, keeping the native surface
+      area deliberately small. A second, separate community repository is
+      also planned to host shareable Lua-built widgets/integrations, kept
+      apart from core on purpose to avoid the maintenance burden seen in
+      projects like Waybar.
+- [ ] **Phase 13** (stretch) - Fade animations via Hyprland's animation
       manager; metatable-based auto-tracking reactivity underneath the
-      existing `Bind()` surface.
+      existing `Bind()` surface. Kept last on purpose - animation polish
+      makes the most sense once the widgets it'd animate (and the state
+      that drives them, Phases 11/12) already exist.
 
 ## Open questions
 

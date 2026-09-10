@@ -848,7 +848,13 @@ hl.bind("ALT + SHIFT + X", function()
 							"scrolled x" .. hyprluiScrollCount
 						)
 					end,
-					hl.plugin.hyprlui.Text({ id = "target_label", x = 12, y = 10, text = "hover / scroll me", size = 13 }),
+					hl.plugin.hyprlui.Text({
+						id = "target_label",
+						x = 12,
+						y = 10,
+						text = "hover / scroll me",
+						size = 13,
+					}),
 				}),
 				hl.plugin.hyprlui.Box({
 					id = "plain_click",
@@ -865,7 +871,13 @@ hl.bind("ALT + SHIFT + X", function()
 							"plain box clicked x" .. hyprluiPlainClicks
 						)
 					end,
-					hl.plugin.hyprlui.Text({ id = "plain_click_label", x = 12, y = 7, text = "click me (plain Box)", size = 12 }),
+					hl.plugin.hyprlui.Text({
+						id = "plain_click_label",
+						x = 12,
+						y = 7,
+						text = "click me (plain Box)",
+						size = 12,
+					}),
 				}),
 				hl.plugin.hyprlui.Text({ id = "status", text = "idle", size = 12 }),
 				hl.plugin.hyprlui.Row({
@@ -903,6 +915,53 @@ hl.bind("ALT + SHIFT + X", function()
 		hyprluiPlainClicks = 0
 	end
 end, { description = "HyprLUI: toggle the interactive state (Phase 10) test window" })
+
+--------------------------------------------------
+---- HYPRLUI PERSISTENCE TEST (Phase 11) ----
+--------------------------------------------------
+-- Exercises hyprlui.persistent() (DESIGN.md Phase 11). Unlike every other
+-- local in this file, the value behind "persistentClicks" survives a
+-- config reload - the wrapper table itself is a fresh Lua table every
+-- time this line re-runs, but :get()/:set() both read/write the SAME
+-- native C++ store underneath, which isn't touched by a reload at all.
+--
+-- To actually see this: press ALT + SHIFT + S a few times (notice the
+-- count), then reload the config (save this file, or `hyprctl reload`),
+-- then press ALT + SHIFT + S again - the count keeps going instead of
+-- resetting to 0, unlike hyprluiClicks/hyprluiScrollCount/every other
+-- plain `local` counter in this file, which WOULD reset on that same
+-- reload.
+
+-- Same top-level-call gap as defineComponent() above (see its own
+-- comment for the full explanation): on first boot this line runs BEFORE
+-- the plugin has loaded, when hl.plugin.hyprlui is still nil, so it has
+-- to be guarded the same way - harmless either way, since PLUGIN_INIT's
+-- reloadConfig() re-runs this whole script again right after the plugin
+-- registers its functions.
+local persistentClicks = nil
+if hl.plugin.hyprlui ~= nil then
+	persistentClicks = hl.plugin.hyprlui.persistent("persistent_clicks_demo", 0)
+end
+
+-- ALT + SHIFT + S: bump the persistent counter and show its current value.
+hl.bind("ALT + SHIFT + S", function()
+	-- Guards against the same first-boot gap persistentClicks itself is
+	-- guarded against above - shouldn't actually be reachable in practice
+	-- (a bind only ever fires well after boot, by which point the
+	-- PLUGIN_INIT-triggered reload has already re-run this file with the
+	-- plugin loaded), but keeps this honest for the type checker too.
+	if not persistentClicks then
+		return
+	end
+
+	local ok, err = pcall(function()
+		persistentClicks:set(persistentClicks:get() + 1)
+		hl.notification.create({ text = "persistent count: " .. persistentClicks:get(), timeout = 2000 })
+	end)
+	if not ok then
+		hyprluiWarn("hyprlui.persistent", err)
+	end
+end, { description = "HyprLUI: bump a persistent counter (survives a config reload)" })
 
 -- ALT + SHIFT + C: deliberately malformed call, NOT wrapped in pcall - this
 -- is the actual crash test. Box{ id = "bad_box" } is missing its required

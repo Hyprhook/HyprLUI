@@ -43,6 +43,29 @@
 ---@alias HyprLUI.WatcherFn fun(): any
 ---@alias HyprLUI.WatchFn fun(name: string, fn: HyprLUI.WatcherFn, opts?: HyprLUI.WatchOptions): nil
 
+-- The only supported types for hyprlui.persistent() - no tables, no
+-- functions (see LuaBridge.hpp for why: a real native re-encoding, not
+-- just a kept Lua reference, since the whole Lua interpreter is torn
+-- down and recreated on every config reload).
+---@alias HyprLUI.PersistentValue number|string|boolean
+
+-- Returned by hyprlui.persistent(key, default) - :get() always reads the
+-- CURRENT value (never a stale snapshot from when persistent() was
+-- called); :set(value) overwrites it. Deliberately explicit methods, not
+-- a mutable field - see LuaBridge.hpp. Generic over `T` (see
+-- hl.plugin.hyprlui.persistent()'s own declaration further down, which is
+-- what actually pins T to whatever `default`'s type was at a given call
+-- site) so `local vol = persistent("volume", 50); vol:get()` resolves to
+-- `number`, not the broad HyprLUI.PersistentValue union every call site
+-- would otherwise share. :set() is typed to that same T, matching the
+-- overwhelmingly common case (reading/writing the same type back) - the
+-- underlying store doesn't actually enforce this at runtime (see
+-- CPersistenceStore's permissive type-mismatch handling), so a genuine
+-- type change is still possible, just not statically typed for.
+---@class HyprLUI.PersistentStore<T>
+---@field get fun(self: HyprLUI.PersistentStore<T>): T
+---@field set fun(self: HyprLUI.PersistentStore<T>, value: T): nil
+
 -- Either a single number (applied to all four sides) or a table with any
 -- subset of sides given (an omitted side defaults to 0, NOT to whatever
 -- the uniform-number form would have used) - same convention `color`
@@ -327,3 +350,15 @@
 ---@type HyprLUI.API
 ---@diagnostic disable-next-line: missing-fields
 hl.plugin.hyprlui = {}
+
+-- Declared as a real generic function (not a HyprLUI.API `---@field ...
+-- fun(...)` type, which LuaLS won't infer a per-call-site T from) so the
+-- language server infers T from whatever `default` actually is at each
+-- call site - e.g. `local vol = hl.plugin.hyprlui.persistent("volume",
+-- 50)` makes `vol:get()` resolve to plain `number`, not the broad
+-- HyprLUI.PersistentValue union every call site would otherwise share.
+---@generic T : HyprLUI.PersistentValue
+---@param key string
+---@param default T
+---@return HyprLUI.PersistentStore<T>
+function hl.plugin.hyprlui.persistent(key, default) end

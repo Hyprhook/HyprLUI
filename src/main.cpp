@@ -20,6 +20,7 @@
 #include "input/InputHook.hpp"
 #include "reserved/ReservedAreaComposer.hpp"
 #include "ui/ComponentRegistry.hpp"
+#include "persistence/PersistenceStore.hpp"
 
 // Do NOT change this function.
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
@@ -167,6 +168,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
 APICALL EXPORT void PLUGIN_EXIT() {
     resetAllState();
+    // Deliberately NOT part of resetAllState() (config.preReload also
+    // calls that, and surviving exactly that reload is the entire reason
+    // CPersistenceStore exists - see its own header comment). Only a
+    // REAL unload clears it.
+    HyprLUI::CPersistenceStore::get().clear();
     HyprLUI::CReservedAreaComposer::get().unregisterHooks(Global::PHANDLE);
     HyprLUI::InputHook::unregisterHooks(Global::PHANDLE);
     HyprLUI::RenderHook::unregisterHooks(Global::PHANDLE);
