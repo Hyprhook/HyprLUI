@@ -319,12 +319,117 @@ end
 --------------------------------------------------
 ---- rendering ----
 --------------------------------------------------
--- Catppuccin Mocha, same palette as the eww reference's eww.scss:
--- base #1e1e2e, mauve #cba6f7, blue #89b4fa, peach #fac6a7.
-local COLOR_BG = 0xff1e1e2e
-local COLOR_KEY = 0xff89b4fa
-local COLOR_DESC = 0xfffac6a7
-local COLOR_DESC_SUBMAP = 0xffcba6f7
+
+-- Single customization block for this demo. `yOffset` is a window-level
+-- setting (the popup's distance from the anchored screen edge), not a
+-- widget prop, so it can't live inside the component itself - it's kept
+-- here anyway so every user-facing knob this demo exposes (per the
+-- request this was built against: y anchor offset, theme colors, font +
+-- size, in/out animation) has exactly one place to edit. Everything else
+-- here is passed straight through to the WhichKeyPopup component below
+-- (defaults: Catppuccin Mocha, same palette as the eww reference's
+-- eww.scss - base #1e1e2e, mauve #cba6f7, blue #89b4fa, peach #fac6a7).
+local CONFIG = {
+	yOffset = 20,
+	bgColor = 0xff1e1e2e,
+	keyColor = 0xff89b4fa,
+	descColor = 0xfffac6a7,
+	descSubmapColor = 0xffcba6f7,
+	font = "sans",
+	size = 13,
+	animationIn = { speed = 3, bezier = "default", style = "slide bottom" },
+	animationOut = { speed = 3, bezier = "default", style = "slide bottom" },
+}
+
+-- Registered via hyprlui.defineComponent() (Phase 9) instead of building
+-- the Stack/Box/Row tree inline in buildAndShow() - this is the demo's
+-- only real widget-tree shape, so turning it into a named, reusable
+-- component is mostly a test of the mechanism itself (see the task this
+-- was built for), but it also means the popup's entire *appearance* is
+-- now just a props table, decoupled from the submap/JSON-grouping logic
+-- that produces `columns`. Schema defaults reuse CONFIG's own values -
+-- still only one literal source for each, even though buildAndShow()
+-- below passes CONFIG's fields through explicitly rather than relying on
+-- them (making every user-facing knob visible at the call site).
+--
+-- Guarded the same way the Phase 9 example in this repo's own
+-- hyprlandd.lua was: defineComponent() runs at top-level module-load
+-- time, which happens BEFORE the plugin has finished loading on first
+-- boot (hl.plugin.hyprlui is still nil then) - main.cpp's PLUGIN_INIT
+-- reloads the config right after registering the plugin's functions, so
+-- this re-runs a second time with hl.plugin.hyprlui populated. Unguarded
+-- would self-correct too, just with a spurious error logged in between.
+if hl.plugin.hyprlui ~= nil then
+	hl.plugin.hyprlui.defineComponent("WhichKeyPopup", {
+		props = {
+			columns = { required = true }, -- this submap's chunked bind entries (buildColumns()'s output) - no sensible default, always supplied fresh per rebuild
+			bgColor = { default = CONFIG.bgColor },
+			keyColor = { default = CONFIG.keyColor },
+			descColor = { default = CONFIG.descColor },
+			descSubmapColor = { default = CONFIG.descSubmapColor },
+			font = { default = CONFIG.font },
+			size = { default = CONFIG.size },
+			animationIn = { default = CONFIG.animationIn },
+			animationOut = { default = CONFIG.animationOut },
+		},
+		render = function(props)
+			-- Right-aligned keys via a separate keys-Column (align="end")
+			-- beside a descriptions-Column (align="start") per
+			-- column-group - the structure this demo ORIGINALLY used. A
+			-- prior revision of this file worked around a row-drift
+			-- symptom here by switching to monospace + manually
+			-- left-padded key strings in a single shared Row per entry
+			-- instead - that was a demo-level band-aid for what turned
+			-- out to be an engine-level bug (CTextNode's measured height
+			-- varying per STRING CONTENT, not just per font/size - see
+			-- gfx::naturalLineHeight()'s own doc comment, gfx.hpp).  Now
+			-- that CTextNode's height is standardized there, this
+			-- simpler two-column structure works correctly again -
+			-- reverted to it deliberately, both because it's simpler (no
+			-- manual padding math, no forced monospace font) and because
+			-- it doubles as a live check that the actual engine fix
+			-- holds.
+			local columnsRow = hl.plugin.hyprlui.Row({ id = "columns", gap = 50, padding = 10 })
+			for i, col in ipairs(props.columns) do
+				local keysColumn = hl.plugin.hyprlui.Column({ id = "keys_" .. i, align = "end", gap = 6 })
+				local descColumn = hl.plugin.hyprlui.Column({ id = "descs_" .. i, align = "start", gap = 6 })
+				for _, entry in ipairs(col) do
+					local isSubmapEntry = entry.dispatcher and entry.dispatcher:find("submap")
+					local keyLabel = modLabel(entry.modmask) .. (entry.key or "?")
+					table.insert(
+						keysColumn,
+						hl.plugin.hyprlui.Text({
+							text = keyLabel,
+							size = props.size,
+							font = props.font,
+							color = props.keyColor,
+						})
+					)
+					table.insert(
+						descColumn,
+						hl.plugin.hyprlui.Text({
+							text = entry.description or "",
+							size = props.size,
+							font = props.font,
+							color = isSubmapEntry and props.descSubmapColor or props.descColor,
+						})
+					)
+				end
+				table.insert(columnsRow, hl.plugin.hyprlui.Row({ id = "col_" .. i, gap = 20, keysColumn, descColumn }))
+			end
+
+			return hl.plugin.hyprlui.Stack({
+				-- debug = true,
+				id = "root",
+				fill = true, -- stretches to match the canvas's forced full-monitor width (Phase 15's root-fills-canvas)
+				animationIn = props.animationIn,
+				animationOut = props.animationOut,
+				hl.plugin.hyprlui.Box({ id = "bg", w = 1, h = 1, fill = true, color = props.bgColor, rounding = 8 }),
+				columnsRow,
+			})
+		end,
+	})
+end
 
 local function closePopup()
 	pcall(hl.plugin.hyprlui.remove_canvas, WHICH_KEY_WINDOW)
@@ -343,40 +448,6 @@ local function buildAndShow(submap, allBinds)
 	end
 	local columns = buildColumns(merged)
 
-	-- Right-aligned keys via a separate keys-Column (align="end") beside
-	-- a descriptions-Column (align="start") per column-group - the
-	-- structure this demo ORIGINALLY used. A prior revision of this file
-	-- worked around a row-drift symptom here by switching to monospace +
-	-- manually left-padded key strings in a single shared Row per entry
-	-- instead - that was a demo-level band-aid for what turned out to be
-	-- an engine-level bug (CTextNode's measured height varying per
-	-- STRING CONTENT, not just per font/size - see gfx::
-	-- naturalLineHeight()'s own doc comment, gfx.hpp, and DESIGN.md's
-	-- Open Questions). Now that CTextNode's height is standardized
-	-- there, this simpler two-column structure works correctly again -
-	-- reverted to it deliberately, both because it's simpler (no
-	-- manual padding math, no forced monospace font) and because it
-	-- doubles as a live check that the actual engine fix holds.
-	local columnsRow = hl.plugin.hyprlui.Row({ id = "columns", gap = 50, padding = 10 })
-	for i, col in ipairs(columns) do
-		local keysColumn = hl.plugin.hyprlui.Column({ id = "keys_" .. i, align = "end", gap = 6 })
-		local descColumn = hl.plugin.hyprlui.Column({ id = "descs_" .. i, align = "start", gap = 6 })
-		for _, entry in ipairs(col) do
-			local isSubmapEntry = entry.dispatcher and entry.dispatcher:find("submap")
-			local keyLabel = modLabel(entry.modmask) .. (entry.key or "?")
-			table.insert(keysColumn, hl.plugin.hyprlui.Text({ text = keyLabel, size = 13, color = COLOR_KEY }))
-			table.insert(
-				descColumn,
-				hl.plugin.hyprlui.Text({
-					text = entry.description or "",
-					size = 13,
-					color = isSubmapEntry and COLOR_DESC_SUBMAP or COLOR_DESC,
-				})
-			)
-		end
-		table.insert(columnsRow, hl.plugin.hyprlui.Row({ id = "col_" .. i, gap = 20, keysColumn, descColumn }))
-	end
-
 	closePopup() -- destroy any still-open popup from the previous submap before rebuilding - content shape differs per submap, so mutating in place isn't practical
 	local ok, err = pcall(function()
 		hl.plugin.hyprlui.window({
@@ -384,16 +455,18 @@ local function buildAndShow(submap, allBinds)
 			anchor = "bottom",
 			w = focusedMonitorWidth(),
 			x = 0,
-			y = 20,
-			hl.plugin.hyprlui.Stack({
-				-- debug = true,
-				id = "root",
-				fill = true, -- stretches to match the canvas's forced full-monitor width (Phase 15's root-fills-canvas)
-				animationIn = { speed = 3, bezier = "default", style = "slide bottom" },
-				animationOut = { speed = 3, bezier = "default", style = "slide bottom" },
-				hl.plugin.hyprlui.Box({ id = "bg", w = 1, h = 1, fill = true, color = COLOR_BG, rounding = 8 }),
-				columnsRow,
-			}),
+			y = CONFIG.yOffset,
+			hl.plugin.hyprlui.Component("WhichKeyPopup", {
+				columns = columns,
+				bgColor = CONFIG.bgColor,
+				keyColor = CONFIG.keyColor,
+				descColor = CONFIG.descColor,
+				descSubmapColor = CONFIG.descSubmapColor,
+				font = CONFIG.font,
+				size = CONFIG.size,
+				animationIn = CONFIG.animationIn,
+				animationOut = CONFIG.animationOut,
+			}, { key = "popup" }),
 		})
 	end)
 	if not ok then
