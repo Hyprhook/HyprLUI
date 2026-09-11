@@ -31,9 +31,11 @@ local M = {}
 --     (empty arg, not the string "reset"), so that filter wouldn't even
 --     match here. Showing "esc - back" seems like better UX anyway
 --     (real which-key.nvim shows <esc> too).
---   - Flat rounded background, no border - CRectNode/Box has no stroke
---     concept yet (see DESIGN.md Phase 19, tracked as a follow-up, not
---     blocking this demo).
+--   - (Resolved) Initially shipped with a flat rounded background and no
+--     border, since Box had no stroke concept yet at the time (tracked
+--     as DESIGN.md Phase 19). Phase 19 landed since - the panel now has
+--     the mauve `border: 2px solid` the reference has too (CONFIG.
+--     borderColor/borderWidth below).
 --   - No show-delay timer (which-key.nvim has one) - doesn't apply here,
 --     we're purely reacting to an already-instant Hyprland-native event,
 --     not debouncing our own keystrokes.

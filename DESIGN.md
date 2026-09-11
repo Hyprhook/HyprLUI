@@ -2848,13 +2848,15 @@ piece (raw-keysym limitation).
        `void` - judged disproportionate to a hazard the narrow fix already
        closes for every currently-reachable case, left here as the
        fallback if a new divergence ever surfaces some other way.
-- **Widget composability (Phase 9) - unsolved.** Storing a constructed
-  widget in a Lua variable and reusing that variable currently reuses the
-  *same instance*, not a fresh tree per use - no component/template
-  concept exists yet. See Phase 9 above for the likely direction (a plain
-  Lua function returning a fresh tree per call) and what's still
-  undecided (props/children passing, per-call `id` collisions,
-  interaction with `Bind()`).
+- ~~Widget composability (Phase 9) - unsolved~~ - resolved by Phase 9:
+  `hyprlui.defineComponent(name, {props=..., render=...})` +
+  `hyprlui.Component(name, props, opts)` (`ComponentRegistry.hpp/.cpp`).
+  A registered `render()` runs once per `Component()` call, producing a
+  fresh tree each time (not a shared instance) - `id` collisions are
+  handled by rewriting every descendant id to `key .. "::" .. originalId`
+  and the root's own id to `key`; `props` are validated against the
+  schema (`{required=true}`/`{default=...}`) at each call. Exercised for
+  real in `demos/which-key.lua`'s `WhichKeyPopup` component.
 - ~~Exact flexbox subset for Phase 1~~ - resolved: `gap`, `padding`
   (uniform, not per-side), `align` (start/center/end only). No
   justify/space-between/wrap - can be added later without changing the
