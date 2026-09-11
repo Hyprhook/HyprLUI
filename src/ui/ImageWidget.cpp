@@ -2,8 +2,8 @@
 
 namespace HyprLUI {
 
-    CImageWidget::CImageWidget(std::string id, const Vector2D& position, std::string path, int rounding) :
-        CWidget(std::move(id), position), m_path(std::move(path)), m_rounding(rounding) {
+    CImageWidget::CImageWidget(std::string id, const Vector2D& position, std::string path, int rounding, Config::CGradientValueData borderColor, int borderWidth) :
+        CWidget(std::move(id), position), m_path(std::move(path)), m_rounding(rounding), m_borderColor(std::move(borderColor)), m_borderWidth(borderWidth) {
         reload();
     }
 
@@ -11,12 +11,17 @@ namespace HyprLUI {
         if (!m_visible || !m_texture)
             return;
 
+        const float opacity = composedOpacity(parentOpacity);
+
         // boxAt(origin, scale) - NOT the texture's native size -
         // deliberately unlike CTextNode::render(): stretching an image to
         // fill an explicit fixed w/h is the expected/desired behavior here
         // (see ImageWidget.hpp's doc comment), so the layout box IS the
         // draw box.
-        gfx::drawTexture(m_texture, boxAt(origin, scale), composedOpacity(parentOpacity), m_rounding);
+        gfx::drawTexture(m_texture, boxAt(origin, scale), opacity, m_rounding);
+
+        if (m_borderWidth > 0)
+            gfx::drawBorder(boxAt(origin, scale), gfx::fadeGradient(m_borderColor, opacity), m_borderWidth, m_rounding);
     }
 
     void CImageWidget::setImage(const std::string& path) {

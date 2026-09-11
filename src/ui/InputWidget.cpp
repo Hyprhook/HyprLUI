@@ -6,7 +6,8 @@
 namespace HyprLUI {
 
     CInputWidget::CInputWidget(std::string id, const Vector2D& position, const Vector2D& size, CHyprColor color, int rounding, std::string initialText, CHyprColor textColor,
-                               int textSize, std::string textFont) : CWidget(std::move(id), position), m_color(color), m_rounding(rounding), m_text(std::move(initialText)) {
+                               int textSize, std::string textFont, Config::CGradientValueData borderColor, int borderWidth) :
+        CWidget(std::move(id), position), m_color(color), m_rounding(rounding), m_borderColor(std::move(borderColor)), m_borderWidth(borderWidth), m_text(std::move(initialText)) {
         m_size = size;
 
         // Small fixed left inset by default so text doesn't touch the
@@ -33,9 +34,14 @@ namespace HyprLUI {
         if (!m_visible)
             return;
 
-        CHyprColor faded = effectiveFillColor(m_color);
-        faded.a *= composedOpacity(parentOpacity);
+        const float opacity = composedOpacity(parentOpacity);
+
+        CHyprColor  faded = effectiveFillColor(m_color);
+        faded.a *= opacity;
         gfx::drawRect(boxAt(origin, scale), faded, m_rounding);
+
+        if (m_borderWidth > 0)
+            gfx::drawBorder(boxAt(origin, scale), gfx::fadeGradient(m_borderColor, opacity), m_borderWidth, m_rounding);
         // See CButtonWidget::render()'s comment - pass parentOpacity, not
         // an already-self-multiplied value, so m_opacity isn't applied to
         // children twice.

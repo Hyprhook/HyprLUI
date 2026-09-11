@@ -25,6 +25,7 @@
 #include "Widget.hpp"
 #include "TextNode.hpp"
 
+#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 #include <hyprland/src/helpers/Color.hpp>
 
 #include <cstdint>
@@ -42,7 +43,8 @@ namespace HyprLUI {
         // setText()/onChange machinery, matching how every other widget
         // here takes its full starting config in the constructor.
         CInputWidget(std::string id, const Vector2D& position, const Vector2D& size, CHyprColor color, int rounding = 0, std::string initialText = "",
-                     CHyprColor textColor = CHyprColor{1.0, 1.0, 1.0, 1.0}, int textSize = 14, std::string textFont = "sans");
+                     CHyprColor textColor = CHyprColor{1.0, 1.0, 1.0, 1.0}, int textSize = 14, std::string textFont = "sans",
+                     Config::CGradientValueData borderColor = Config::CGradientValueData{CHyprColor{}}, int borderWidth = 0);
 
         void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) override;
 
@@ -51,6 +53,10 @@ namespace HyprLUI {
         }
         void setRounding(int rounding) {
             m_rounding = rounding;
+        }
+        void setBorder(Config::CGradientValueData color, int width) {
+            m_borderColor = std::move(color);
+            m_borderWidth = width;
         }
 
         // Sets the current text programmatically (e.g. pre-filling or
@@ -123,6 +129,8 @@ namespace HyprLUI {
       private:
         CHyprColor                              m_color;
         int                                     m_rounding;
+        Config::CGradientValueData              m_borderColor;
+        int                                     m_borderWidth;
         std::string                             m_text;
         std::shared_ptr<CTextNode>              m_label; // owned display child - see the .cpp for why it's added via addChild() rather than kept purely internal
         std::function<void(uint32_t, bool)>     m_onKey;

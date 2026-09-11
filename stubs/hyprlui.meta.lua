@@ -9,6 +9,14 @@
 ---@meta
 
 ---@alias HyprLUI.Color integer|{r?: number, g?: number, b?: number, a?: number}
+-- A list of 1+ colors plus a rotation `angle` (degrees) - same syntax and
+-- semantics as Hyprland's own `general:col.active_border` gradient config.
+-- A single color is just the one-color-list case; anywhere a `BorderColor`
+-- field is accepted, a plain `HyprLUI.Color` works too (solid border).
+---@class HyprLUI.GradientSpec
+---@field colors HyprLUI.Color[]
+---@field angle? number
+---@alias HyprLUI.BorderColor HyprLUI.Color|HyprLUI.GradientSpec
 ---@alias HyprLUI.Align "start"|"center"|"end"
 ---@alias HyprLUI.ZOrder "overlay"|"background"
 ---@alias HyprLUI.Anchor "top-left"|"top"|"top-right"|"left"|"center"|"right"|"bottom-left"|"bottom"|"bottom-right"
@@ -235,6 +243,8 @@
 ---@field h number
 ---@field color? HyprLUI.Color
 ---@field rounding? integer
+---@field borderColor? HyprLUI.BorderColor
+---@field borderWidth? integer
 
 ---@class HyprLUI.TextSpec : HyprLUI.WidgetCommon
 ---@field text string|HyprLUI.BindMarker
@@ -280,6 +290,8 @@
 ---@field h number
 ---@field color? HyprLUI.Color
 ---@field rounding? integer
+---@field borderColor? HyprLUI.BorderColor
+---@field borderWidth? integer
 
 -- A focusable rectangle that behaves like an actual text field by default
 -- - typing appends a character, Backspace removes the last one, current
@@ -300,6 +312,8 @@
 ---@field h number
 ---@field color? HyprLUI.Color
 ---@field rounding? integer
+---@field borderColor? HyprLUI.BorderColor
+---@field borderWidth? integer
 ---@field text? string
 ---@field textColor? HyprLUI.Color
 ---@field textSize? integer
@@ -319,6 +333,8 @@
 ---@field h? number
 ---@field path string
 ---@field rounding? integer
+---@field borderColor? HyprLUI.BorderColor
+---@field borderWidth? integer
 
 -- A thin separator line - pure Lua-side sugar over a Box with a computed
 -- w/h. `length` is the dimension along the divider's own axis (w if
@@ -347,6 +363,8 @@
 ---@field color? HyprLUI.Color
 ---@field checkedColor? HyprLUI.Color
 ---@field rounding? integer
+---@field borderColor? HyprLUI.BorderColor
+---@field borderWidth? integer
 ---@field checked? boolean
 ---@field onChange? HyprLUI.OnChangeBoolFn
 

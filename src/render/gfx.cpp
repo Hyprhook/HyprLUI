@@ -1,7 +1,9 @@
 #include "gfx.hpp"
 
 #include <hyprland/src/Compositor.hpp>
+#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/pass/BorderPassElement.hpp>
 #include <hyprland/src/render/pass/RectPassElement.hpp>
 #include <hyprland/src/render/pass/TexPassElement.hpp>
 
@@ -118,6 +120,36 @@ namespace HyprLUI::gfx {
         data.roundingPower = 2.F;
 
         g_pHyprRenderer->m_renderPass.add(makeUnique<CRectPassElement>(data));
+    }
+
+    void drawBorder(const CBox& box, const Config::CGradientValueData& grad, int borderWidth, int rounding) {
+        if (borderWidth <= 0)
+            return;
+
+        CBorderPassElement::SBorderData data;
+        // Shrink by borderWidth BEFORE scaling into monitor-local space
+        // (toMonitorLocal), then let CBorderPassElement's own renderer
+        // (OpenGL.cpp's renderBorder()) expand it back outward by the
+        // same (now-scaled) amount when it draws - net effect, the ring
+        // lands flush with `box`'s original, unshrunk outer edge and
+        // grows inward, giving the CSS border-box behavior this
+        // function's own header doc comment promises, using Hyprland's
+        // outward-growing primitive unmodified.
+        data.box           = toMonitorLocal(box.copy().expand(-borderWidth));
+        data.grad1         = grad;
+        data.round         = rounding;
+        data.borderSize    = borderWidth;
+        data.roundingPower = 2.F;
+
+        g_pHyprRenderer->m_renderPass.add(makeUnique<CBorderPassElement>(data));
+    }
+
+    Config::CGradientValueData fadeGradient(const Config::CGradientValueData& grad, float opacity) {
+        Config::CGradientValueData faded = grad;
+        for (auto& c : faded.m_colors)
+            c.a *= opacity;
+        faded.updateColorsOk();
+        return faded;
     }
 
     void damageBox(const CBox& box) {

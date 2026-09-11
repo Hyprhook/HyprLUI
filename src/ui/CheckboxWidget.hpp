@@ -22,6 +22,7 @@
 
 #include "Widget.hpp"
 
+#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 #include <hyprland/src/helpers/Color.hpp>
 
 #include <functional>
@@ -30,8 +31,10 @@ namespace HyprLUI {
 
     class CCheckboxWidget : public CWidget {
       public:
-        CCheckboxWidget(std::string id, const Vector2D& position, const Vector2D& size, CHyprColor color, CHyprColor checkedColor, int rounding = 0, bool checked = false) :
-            CWidget(std::move(id), position), m_color(color), m_checkedColor(checkedColor), m_rounding(rounding), m_checked(checked) {
+        CCheckboxWidget(std::string id, const Vector2D& position, const Vector2D& size, CHyprColor color, CHyprColor checkedColor, int rounding = 0, bool checked = false,
+                        Config::CGradientValueData borderColor = Config::CGradientValueData{CHyprColor{}}, int borderWidth = 0) :
+            CWidget(std::move(id), position), m_color(color), m_checkedColor(checkedColor), m_rounding(rounding), m_checked(checked), m_borderColor(std::move(borderColor)),
+            m_borderWidth(borderWidth) {
             m_size = size;
         }
 
@@ -45,6 +48,10 @@ namespace HyprLUI {
         }
         void setRounding(int rounding) {
             m_rounding = rounding;
+        }
+        void setBorder(Config::CGradientValueData color, int width) {
+            m_borderColor = std::move(color);
+            m_borderWidth = width;
         }
 
         void setOnChange(std::function<void(bool)> fn) {
@@ -89,11 +96,13 @@ namespace HyprLUI {
         }
 
       private:
-        CHyprColor                m_color;
-        CHyprColor                m_checkedColor;
-        int                       m_rounding;
-        bool                      m_checked;
-        std::function<void(bool)> m_onChange;
+        CHyprColor                 m_color;
+        CHyprColor                 m_checkedColor;
+        int                        m_rounding;
+        bool                       m_checked;
+        Config::CGradientValueData m_borderColor;
+        int                        m_borderWidth;
+        std::function<void(bool)>  m_onChange;
     };
 
 } // namespace HyprLUI

@@ -2651,37 +2651,78 @@ piece (raw-keysym limitation).
       now). Not tested live in a running compositor this session -
       build/`nm`/lint are clean; needs live confirmation.
 
-- [ ] **Phase 19** - Border/stroke support for widgets (and windows, via
-      their root widget - same "no distinction between a widget and its
-      window" principle as animation/`fill`, not a separate CCanvas-level
-      mechanism). Not started.
+- [x] **Phase 19** - Border/stroke support for widgets.
     - **Found while auditing HyprLUI against the first real `demos/`
       project** (a which-key-style popup, see its own plan/notes) - the
       reference eww implementation being replicated has a mauve `border:
-      2px solid` around its panel, which `Box` currently can't express at
-      all: `CRectNode::render()` only ever calls `gfx::drawRect(box,
+      2px solid` around its panel, which `Box` currently couldn't express
+      at all: `CRectNode::render()` only ever called `gfx::drawRect(box,
       color, rounding)` - a flat fill, no separate stroke color/width.
       Skipped for that demo's v1 (flat rounded background instead, no
       border) rather than building this feature under demo time
-      pressure - tracked here to come back to deliberately.
-    - Likely shape: `borderColor`/`borderWidth` (name TBD) fields
-      alongside `color`/`rounding`, at minimum on `Box` - worth deciding
-      at implementation time whether this belongs on `CRectNode`
-      specifically or generalizes to a shared `CWidget`-level property
-      the way `padding`/`margin`/`opacity` already do (same question
-      `fill`/`style` each had to answer, and both ended up widget-
-      generic).
-    - Two candidate implementations, not yet chosen: (1) a real stroke-
-      drawing primitive in `gfx.cpp` (draws just the outline, whatever
-      Hyprland's own renderer offers for that - not yet investigated);
-      (2) the cheaper "two nested rects" trick (draw a slightly larger
-      rect in the border color, then the real fill-colored rect inset by
-      the border width, on top) entirely internal to `CRectNode::
-      render()` - no new `gfx.cpp` capability needed, just two draw calls
-      instead of one. Leaning toward (2) unless investigating (1) turns
-      up a reason it's meaningfully better (e.g. correctness at
-      fractional/rounded corners, where two-nested-rects could show
-      seams or double-antialiasing artifacts) - untested either way.
+      pressure - tracked here, then implemented as its own follow-up.
+    - **Implementation chosen after reading Hyprland's own border
+      rendering** (`src/render/pass/BorderPassElement.{hpp,cpp}`,
+      `OpenGL.cpp`'s `renderBorder()`): Hyprland already has a dedicated
+      `CBorderPassElement`/`SH_FRAG_BORDER1` shader that draws a TRUE
+      rounded-rect stroke (not a filled rect), queued onto
+      `m_renderPass` exactly like `CRectPassElement`/`CTexPassElement`
+      already are in `gfx.cpp` - same internal-header stability tier
+      this codebase already depends on. Went with a thin `gfx::
+      drawBorder()` wrapper around that primitive, NOT the "two nested
+      rects" alternative floated when this phase was first written - two
+      rects can't produce a correct hollow/transparent-center border (a
+      widget with a transparent fill would show a solid border-colored
+      square, since there's no way to punch a hole with a second rect),
+      while the real primitive handles that correctly by construction.
+    - **Box model: CSS border-box, not Hyprland's own window-border
+      convention** (explicit user decision) - Hyprland grows a window's
+      border OUTWARD past its content box; HyprLUI's border instead draws
+      INSET into the widget's own box by `borderWidth`, so a widget's w/h
+      never change and no caller has to compensate its own layout math
+      for border thickness (same "the box you pass is the box you get"
+      contract `padding`/`margin` already have). Implemented in `gfx::
+      drawBorder()` by shrinking the box handed to `CBorderPassElement`
+      by `borderWidth` BEFORE Hyprland's own renderer expands it back
+      outward by the same amount - nets out to a ring flush with the
+      widget's original outer edge, growing inward.
+    - **Per-widget, not `CWidget`-base** (explicit user decision,
+      confirmed against precedent): mirrors how `rounding` itself works
+      today - `Box`/`Button`/`Input`/`Checkbox`/`Image` each carry their
+      own `m_rounding`, NOT a shared `CWidget`-level field (unlike
+      `fill`/`padding`/`margin`/`opacity`, which genuinely are on the
+      base class). A border only makes sense on something that already
+      draws its own rect/texture, same category as rounding, not the
+      generic-layout category - so `borderColor`/`borderWidth` were added
+      to all five of those widget kinds (`m_borderColor`/`m_borderWidth`
+      fields, `setBorder()`, constructor params - same shape as
+      `rounding`'s own plumbing), not centralized. No separate
+      "window-level border" mechanism either - `hyprlui.window()` itself
+      has no `rounding` field of its own (a "rounded window" is just a
+      Box root with `rounding` set), so a bordered window is likewise
+      just a Box root with `borderColor`/`borderWidth` set - nothing
+      window-specific to add.
+    - **Full gradient support** (explicit user decision, mirroring
+      Hyprland's own `general:col.active_border` exactly): `borderColor`
+      accepts either a plain `HyprLUI.Color` (solid) or a
+      `{ colors = {...}, angle = degrees }` gradient spec - one C++ type
+      on the other end either way (`Config::CGradientValueData`, which
+      already treats a single color as the one-color-list case of a
+      gradient, not a separate type), parsed by one new
+      `parseGradientField()` helper in `LuaBridge.cpp` (mirrors
+      `parseColorField()`'s existing shape-detection pattern). A widget's
+      border also fades with its own opacity animations (`gfx::
+      fadeGradient()`, multiplies every gradient stop's alpha) - the
+      border equivalent of the `faded.a *= composedOpacity(...)` every
+      widget's fill already does inline.
+    - `rounding` passed to `drawBorder()` should be the SAME value passed
+      to the paired `drawRect()`/`drawTexture()` call, so the ring's
+      corner radius visually matches the fill's - documented on `gfx::
+      drawBorder()` itself, not separately validated (same trust-the-
+      caller convention as the rest of `gfx.cpp`).
+    - Not yet exercised in the which-key demo itself or in a live
+      compositor - build/`nm` are clean (`drawBorder`/`fadeGradient`
+      both resolve), not yet visually confirmed.
 
 - [x] **Phase 20** - `CTextNode`'s measured height standardized per
       (font, point size), independent of string content.

@@ -7,9 +7,14 @@ namespace HyprLUI {
         if (!m_visible)
             return;
 
-        CHyprColor faded = effectiveFillColor(m_color);
-        faded.a *= composedOpacity(parentOpacity);
+        const float opacity = composedOpacity(parentOpacity);
+
+        CHyprColor  faded = effectiveFillColor(m_color);
+        faded.a *= opacity;
         gfx::drawRect(boxAt(origin, scale), faded, m_rounding);
+
+        if (m_borderWidth > 0)
+            gfx::drawBorder(boxAt(origin, scale), gfx::fadeGradient(m_borderColor, opacity), m_borderWidth, m_rounding);
         // CWidget::render() composes in m_opacity (and any visibility-fade
         // progress) itself before handing that to children - passing
         // parentOpacity (NOT the already-self-composed `faded.a` factor

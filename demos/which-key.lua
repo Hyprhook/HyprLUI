@@ -320,21 +320,30 @@ end
 ---- rendering ----
 --------------------------------------------------
 
--- Single customization block for this demo. `yOffset` is a window-level
--- setting (the popup's distance from the anchored screen edge), not a
--- widget prop, so it can't live inside the component itself - it's kept
--- here anyway so every user-facing knob this demo exposes (per the
--- request this was built against: y anchor offset, theme colors, font +
--- size, in/out animation) has exactly one place to edit. Everything else
--- here is passed straight through to the WhichKeyPopup component below
--- (defaults: Catppuccin Mocha, same palette as the eww reference's
--- eww.scss - base #1e1e2e, mauve #cba6f7, blue #89b4fa, peach #fac6a7).
+-- Single customization block for this demo. `xOffset`/`yOffset` are
+-- window-level settings (the popup's offset from its anchored screen
+-- edge/corner), not widget props, so they can't live inside the
+-- component itself - kept here anyway so every user-facing knob this
+-- demo exposes (per the request this was built against: x/y anchor
+-- offset, theme colors, font + size, in/out animation) has exactly one
+-- place to edit. Everything else here is passed straight through to the
+-- WhichKeyPopup component below (defaults: Catppuccin Mocha, same
+-- palette as the eww reference's eww.scss - base #1e1e2e, mauve #cba6f7,
+-- blue #89b4fa, peach #fac6a7).
 local CONFIG = {
+	xOffset = 0,
 	yOffset = 20,
 	bgColor = 0xff1e1e2e,
 	keyColor = 0xff89b4fa,
 	descColor = 0xfffac6a7,
 	descSubmapColor = 0xffcba6f7,
+	-- The eww reference this demo replicates has a mauve `border: 2px
+	-- solid` around its panel (see DESIGN.md Phase 19, where this was
+	-- originally skipped as a v1 gap and tracked to come back to) - same
+	-- mauve as descSubmapColor above, now that Box actually has a
+	-- borderColor/borderWidth to give it one.
+	borderColor = 0xffcba6f7,
+	borderWidth = 2,
 	font = "sans",
 	size = 13,
 	padding = 10,
@@ -368,6 +377,8 @@ if hl.plugin.hyprlui ~= nil then
 			keyColor = { default = CONFIG.keyColor },
 			descColor = { default = CONFIG.descColor },
 			descSubmapColor = { default = CONFIG.descSubmapColor },
+			borderColor = { default = CONFIG.borderColor },
+			borderWidth = { default = CONFIG.borderWidth },
 			font = { default = CONFIG.font },
 			size = { default = CONFIG.size },
 			padding = { default = CONFIG.padding },
@@ -426,7 +437,16 @@ if hl.plugin.hyprlui ~= nil then
 				fill = true, -- stretches to match the canvas's forced full-monitor width (Phase 15's root-fills-canvas)
 				animationIn = props.animationIn,
 				animationOut = props.animationOut,
-				hl.plugin.hyprlui.Box({ id = "bg", w = 1, h = 1, fill = true, color = props.bgColor, rounding = 8 }),
+				hl.plugin.hyprlui.Box({
+					id = "bg",
+					w = 1,
+					h = 1,
+					fill = true,
+					color = props.bgColor,
+					rounding = 8,
+					borderColor = props.borderColor,
+					borderWidth = props.borderWidth,
+				}),
 				columnsRow,
 			})
 		end,
@@ -452,6 +472,8 @@ local buildPopup = function(columns)
 		keyColor = CONFIG.keyColor,
 		descColor = CONFIG.descColor,
 		descSubmapColor = CONFIG.descSubmapColor,
+		borderColor = CONFIG.borderColor,
+		borderWidth = CONFIG.borderWidth,
 		font = CONFIG.font,
 		size = CONFIG.size,
 		padding = CONFIG.padding,
@@ -462,16 +484,20 @@ end
 
 -- Call any time after require()'ing this module - order against
 -- M.test_binds()/the module's own always-active hl.on("keybinds.submap",
--- ...) hook doesn't matter, since buildPopup/CONFIG.yOffset are only ever
--- READ once a submap change actually fires a rebuild, never at require()
--- time. Re-call this on every config reload alongside the require() that
--- brings the module back in, same as M.test_binds() - the whole module
--- (including CONFIG/buildPopup's defaults) re-evaluates from scratch
--- every reload, so an override made before the last reload is gone.
+-- ...) hook doesn't matter, since buildPopup/CONFIG.xOffset/CONFIG.
+-- yOffset are only ever READ once a submap change actually fires a
+-- rebuild, never at require() time. Re-call this on every config reload
+-- alongside the require() that brings the module back in, same as
+-- M.test_binds() - the whole module (including CONFIG/buildPopup's
+-- defaults) re-evaluates from scratch every reload, so an override made
+-- before the last reload is gone.
 function M.setup(opts)
 	opts = opts or {}
 	if opts.buildPopup then
 		buildPopup = opts.buildPopup
+	end
+	if opts.xOffset then
+		CONFIG.xOffset = opts.xOffset
 	end
 	if opts.yOffset then
 		CONFIG.yOffset = opts.yOffset
@@ -496,7 +522,7 @@ local function buildAndShow(submap, allBinds)
 		hl.plugin.hyprlui.window({
 			name = WHICH_KEY_WINDOW,
 			anchor = "bottom",
-			w = focusedMonitorWidth(),
+			w = focusedMonitorWidth() - (CONFIG.xOffset * 2),
 			x = 0,
 			y = CONFIG.yOffset,
 			buildPopup(columns),

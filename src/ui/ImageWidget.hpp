@@ -23,13 +23,16 @@
 #include "Widget.hpp"
 #include "../render/gfx.hpp"
 
+#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
+
 #include <string>
 
 namespace HyprLUI {
 
     class CImageWidget : public CWidget {
       public:
-        CImageWidget(std::string id, const Vector2D& position, std::string path, int rounding = 0);
+        CImageWidget(std::string id, const Vector2D& position, std::string path, int rounding = 0,
+                     Config::CGradientValueData borderColor = Config::CGradientValueData{CHyprColor{}}, int borderWidth = 0);
 
         void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) override;
 
@@ -40,6 +43,10 @@ namespace HyprLUI {
 
         void setRounding(int rounding) {
             m_rounding = rounding;
+        }
+        void setBorder(Config::CGradientValueData color, int width) {
+            m_borderColor = std::move(color);
+            m_borderWidth = width;
         }
 
         // False if the file was missing/unreadable or failed to decode -
@@ -52,11 +59,13 @@ namespace HyprLUI {
         }
 
       private:
-        void            reload();
+        void                       reload();
 
-        std::string     m_path;
-        int             m_rounding;
-        SP<HyprTexture> m_texture;
+        std::string                m_path;
+        int                        m_rounding;
+        Config::CGradientValueData m_borderColor;
+        int                        m_borderWidth;
+        SP<HyprTexture>            m_texture;
     };
 
 } // namespace HyprLUI

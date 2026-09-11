@@ -14,6 +14,7 @@
 #include "../services/NativeServices.hpp"
 
 #include <hyprland/src/helpers/Color.hpp>
+#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/state/MonitorQuery.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -28,6 +29,7 @@ extern "C" {
 #include <lauxlib.h>
 }
 
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -166,6 +168,74 @@ namespace HyprLUI::Lua {
             }
             lua_pop(L, 1);
             return parseColorField(L, idx, key, CHyprColor{}, fnName);
+        }
+
+        // `borderColor`-shaped fields (Phase 19): accepts the SAME shapes
+        // as parseColorField() above (a plain solid color), OR a table
+        // `{ colors = {...}, angle = degrees }` mirroring Hyprland's own
+        // `general:col.active_border` gradient syntax (a list of 1+
+        // colors plus a rotation angle in degrees, matched exactly - see
+        // Config::CGradientValueData, which already treats a single color
+        // as the one-color-list case of a gradient, not a separate type).
+        // One parser for both shapes rather than two, since the C++ type
+        // on the other end (CGradientValueData) already doesn't
+        // distinguish them.
+        Config::CGradientValueData parseGradientField(lua_State* L, int idx, const char* key, const CHyprColor& def, const char* fnName) {
+            lua_getfield(L, idx, key);
+
+            if (lua_isnil(L, -1)) {
+                lua_pop(L, 1);
+                return Config::CGradientValueData(def);
+            }
+
+            bool isGradientSpec = false;
+            if (lua_istable(L, -1)) {
+                lua_getfield(L, -1, "colors");
+                isGradientSpec = !lua_isnil(L, -1);
+                lua_pop(L, 1);
+            }
+
+            if (!isGradientSpec) {
+                // A number, or a plain {r, g, b, a} table (no `colors`
+                // key) - same shape parseColorField() already knows how
+                // to read. Pop our own peek first; parseColorField() does
+                // its own independent lua_getfield(L, idx, key) fetch of
+                // this same field.
+                lua_pop(L, 1);
+                return Config::CGradientValueData(parseColorField(L, idx, key, def, fnName));
+            }
+
+            const int specIdx = lua_gettop(L);
+
+            lua_getfield(L, specIdx, "colors");
+            if (!lua_istable(L, -1))
+                luaL_error(L, "%s: field '%s.colors' must be a table (list of colors)", fnName, key);
+            const int  colorsIdx = lua_gettop(L);
+            const auto n         = lua_rawlen(L, colorsIdx);
+            if (n == 0)
+                luaL_error(L, "%s: field '%s.colors' must have at least one color", fnName, key);
+
+            std::vector<CHyprColor> colors;
+            colors.reserve(n);
+            for (lua_Integer i = 1; i <= static_cast<lua_Integer>(n); ++i) {
+                lua_rawgeti(L, colorsIdx, i);
+                if (lua_isnumber(L, -1)) {
+                    colors.emplace_back(static_cast<uint64_t>(lua_tointeger(L, -1)));
+                } else if (lua_istable(L, -1)) {
+                    const int cIdx = lua_gettop(L);
+                    colors.emplace_back(static_cast<float>(fieldNumber(L, cIdx, "r", 1.0)), static_cast<float>(fieldNumber(L, cIdx, "g", 1.0)),
+                                        static_cast<float>(fieldNumber(L, cIdx, "b", 1.0)), static_cast<float>(fieldNumber(L, cIdx, "a", 1.0)));
+                } else {
+                    luaL_error(L, "%s: field '%s.colors[%d]' must be a number or table {r, g, b, a}", fnName, key, static_cast<int>(i));
+                }
+                lua_pop(L, 1);
+            }
+            lua_pop(L, 1); // colors table
+
+            const double angleDeg = fieldNumber(L, specIdx, "angle", 0);
+            lua_pop(L, 1); // spec table
+
+            return Config::CGradientValueData(std::move(colors), static_cast<float>(angleDeg * (M_PI / 180.0)));
         }
 
         // Resolves EITHER a `bezier` or `spring` field on the table at
@@ -619,16 +689,20 @@ namespace HyprLUI::Lua {
             PWidget      widget;
 
             if (type == "box") {
-                const double w        = requireFieldNumber(L, idx, "w", "hyprlui.Box");
-                const double h        = requireFieldNumber(L, idx, "h", "hyprlui.Box");
-                const auto   color    = parseColorField(L, idx, "color", CHyprColor{1.0, 1.0, 1.0, 1.0}, "hyprlui.Box");
-                const int    rounding = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
-                widget                = std::make_shared<CRectNode>(id, Vector2D{x, y}, Vector2D{w, h}, color, rounding);
+                const double w           = requireFieldNumber(L, idx, "w", "hyprlui.Box");
+                const double h           = requireFieldNumber(L, idx, "h", "hyprlui.Box");
+                const auto   color       = parseColorField(L, idx, "color", CHyprColor{1.0, 1.0, 1.0, 1.0}, "hyprlui.Box");
+                const int    rounding    = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
+                const auto   borderColor = parseGradientField(L, idx, "borderColor", CHyprColor{}, "hyprlui.Box");
+                const int    borderWidth = static_cast<int>(fieldNumber(L, idx, "borderWidth", 0));
+                widget                   = std::make_shared<CRectNode>(id, Vector2D{x, y}, Vector2D{w, h}, color, rounding, borderColor, borderWidth);
 
             } else if (type == "image") {
-                const auto path     = requireFieldString(L, idx, "path", "hyprlui.Image");
-                const int  rounding = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
-                auto       image    = std::make_shared<CImageWidget>(id, Vector2D{x, y}, path, rounding);
+                const auto path        = requireFieldString(L, idx, "path", "hyprlui.Image");
+                const int  rounding    = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
+                const auto borderColor = parseGradientField(L, idx, "borderColor", CHyprColor{}, "hyprlui.Image");
+                const int  borderWidth = static_cast<int>(fieldNumber(L, idx, "borderWidth", 0));
+                auto       image       = std::make_shared<CImageWidget>(id, Vector2D{x, y}, path, rounding, borderColor, borderWidth);
                 if (!image->loaded())
                     Log::logger->log(Log::WARN, "[hyprlui] Image '{}': failed to load '{}' - drawing nothing", id, path);
                 widget = image;
@@ -656,29 +730,33 @@ namespace HyprLUI::Lua {
                 widget = std::make_shared<CRectNode>(id, Vector2D{x, y}, size, color, 0);
 
             } else if (type == "button") {
-                const double w        = requireFieldNumber(L, idx, "w", "hyprlui.Button");
-                const double h        = requireFieldNumber(L, idx, "h", "hyprlui.Button");
-                const auto   color    = parseColorField(L, idx, "color", CHyprColor{0.2, 0.2, 0.2, 1.0}, "hyprlui.Button");
-                const int    rounding = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
+                const double w           = requireFieldNumber(L, idx, "w", "hyprlui.Button");
+                const double h           = requireFieldNumber(L, idx, "h", "hyprlui.Button");
+                const auto   color       = parseColorField(L, idx, "color", CHyprColor{0.2, 0.2, 0.2, 1.0}, "hyprlui.Button");
+                const int    rounding    = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
+                const auto   borderColor = parseGradientField(L, idx, "borderColor", CHyprColor{}, "hyprlui.Button");
+                const int    borderWidth = static_cast<int>(fieldNumber(L, idx, "borderWidth", 0));
                 // onClick is parsed generically below (Phase 10 follow-up
                 // - CWidget's own field now, not Button-specific).
-                widget = std::make_shared<CButtonWidget>(id, Vector2D{x, y}, Vector2D{w, h}, color, rounding);
+                widget = std::make_shared<CButtonWidget>(id, Vector2D{x, y}, Vector2D{w, h}, color, rounding, borderColor, borderWidth);
 
             } else if (type == "input") {
-                const double w         = requireFieldNumber(L, idx, "w", "hyprlui.Input");
-                const double h         = requireFieldNumber(L, idx, "h", "hyprlui.Input");
-                const auto   color     = parseColorField(L, idx, "color", CHyprColor{0.15, 0.15, 0.15, 1.0}, "hyprlui.Input");
-                const int    rounding  = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
-                const auto   text      = optFieldString(L, idx, "text", "");
-                const auto   textColor = parseColorField(L, idx, "textColor", CHyprColor{1.0, 1.0, 1.0, 1.0}, "hyprlui.Input");
-                const int    textSize  = static_cast<int>(fieldNumber(L, idx, "textSize", 14));
-                const auto   textFont  = optFieldString(L, idx, "textFont", "sans");
-                auto         onKey     = fieldOnKey(L, idx);
-                auto         onChange  = fieldOnChange(L, idx);
-                auto         onFocus   = fieldZeroArgFn(L, idx, "onFocus");
-                auto         onBlur    = fieldZeroArgFn(L, idx, "onBlur");
+                const double w           = requireFieldNumber(L, idx, "w", "hyprlui.Input");
+                const double h           = requireFieldNumber(L, idx, "h", "hyprlui.Input");
+                const auto   color       = parseColorField(L, idx, "color", CHyprColor{0.15, 0.15, 0.15, 1.0}, "hyprlui.Input");
+                const int    rounding    = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
+                const auto   borderColor = parseGradientField(L, idx, "borderColor", CHyprColor{}, "hyprlui.Input");
+                const int    borderWidth = static_cast<int>(fieldNumber(L, idx, "borderWidth", 0));
+                const auto   text        = optFieldString(L, idx, "text", "");
+                const auto   textColor   = parseColorField(L, idx, "textColor", CHyprColor{1.0, 1.0, 1.0, 1.0}, "hyprlui.Input");
+                const int    textSize    = static_cast<int>(fieldNumber(L, idx, "textSize", 14));
+                const auto   textFont    = optFieldString(L, idx, "textFont", "sans");
+                auto         onKey       = fieldOnKey(L, idx);
+                auto         onChange    = fieldOnChange(L, idx);
+                auto         onFocus     = fieldZeroArgFn(L, idx, "onFocus");
+                auto         onBlur      = fieldZeroArgFn(L, idx, "onBlur");
 
-                auto         input = std::make_shared<CInputWidget>(id, Vector2D{x, y}, Vector2D{w, h}, color, rounding, text, textColor, textSize, textFont);
+                auto input = std::make_shared<CInputWidget>(id, Vector2D{x, y}, Vector2D{w, h}, color, rounding, text, textColor, textSize, textFont, borderColor, borderWidth);
                 if (onKey)
                     input->setOnKey(std::move(onKey));
                 if (onChange)
@@ -695,10 +773,12 @@ namespace HyprLUI::Lua {
                 const auto   color        = parseColorField(L, idx, "color", CHyprColor{0.2, 0.2, 0.2, 1.0}, "hyprlui.Checkbox");
                 const auto   checkedColor = parseColorField(L, idx, "checkedColor", CHyprColor{0.3, 0.6, 1.0, 1.0}, "hyprlui.Checkbox");
                 const int    rounding     = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
+                const auto   borderColor  = parseGradientField(L, idx, "borderColor", CHyprColor{}, "hyprlui.Checkbox");
+                const int    borderWidth  = static_cast<int>(fieldNumber(L, idx, "borderWidth", 0));
                 const bool   checked      = optFieldBool(L, idx, "checked", false);
                 auto         onChange     = fieldOnChangeBool(L, idx);
 
-                auto         checkbox = std::make_shared<CCheckboxWidget>(id, Vector2D{x, y}, Vector2D{w, h}, color, checkedColor, rounding, checked);
+                auto         checkbox = std::make_shared<CCheckboxWidget>(id, Vector2D{x, y}, Vector2D{w, h}, color, checkedColor, rounding, checked, borderColor, borderWidth);
                 if (onChange)
                     checkbox->setOnChange(std::move(onChange));
                 widget = checkbox;

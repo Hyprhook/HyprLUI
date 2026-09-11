@@ -15,6 +15,9 @@ namespace HyprLUI {
         outer.a *= opacity;
         gfx::drawRect(boxAt(origin, scale), outer, m_rounding);
 
+        if (m_borderWidth > 0)
+            gfx::drawBorder(boxAt(origin, scale), gfx::fadeGradient(m_borderColor, opacity), m_borderWidth, m_rounding);
+
         if (!m_checked)
             return;
 
