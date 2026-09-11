@@ -8,6 +8,8 @@
 #include <hyprgraphics/image/Image.hpp>
 #include <hyprgraphics/cairo/CairoSurface.hpp>
 
+#include <unordered_map>
+
 namespace HyprLUI::gfx {
 
     PHLMONITOR currentMonitor() {
@@ -24,6 +26,28 @@ namespace HyprLUI::gfx {
         // your installed src/render/Renderer.hpp for `renderText` to see
         // where it lives now.
         return g_pHyprRenderer->renderText(text, color, pointSize, /* italic = */ false, fontFamily, maxWidth, weight);
+    }
+
+    double naturalLineHeight(const std::string& fontFamily, int pointSize) {
+        // Keyed by the exact (family, size) pair - a real render only ever
+        // happens once per distinct combo, see this function's own doc
+        // comment (gfx.hpp) for why.
+        static std::unordered_map<std::string, double> s_cache;
+
+        const std::string                              key = fontFamily + ":" + std::to_string(pointSize);
+        if (const auto it = s_cache.find(key); it != s_cache.end())
+            return it->second;
+
+        // Color/maxWidth/weight are irrelevant here - only the resulting
+        // TEXTURE HEIGHT is ever read, the texture itself is discarded
+        // immediately. Falls back to a plain multiplier if rendering
+        // somehow fails (e.g. a bogus font name) - better than crashing
+        // or returning 0 and collapsing every line to no height at all.
+        const auto   tex    = makeTextTexture("Ag", CHyprColor{1.0, 1.0, 1.0, 1.0}, pointSize, fontFamily);
+        const double height = tex ? tex->m_size.y : pointSize * 1.3;
+
+        s_cache[key] = height;
+        return height;
     }
 
     SP<HyprTexture> makeImageTexture(const std::string& path) {

@@ -43,6 +43,34 @@ namespace HyprLUI::gfx {
     SP<HyprTexture> makeTextTexture(const std::string& text, const CHyprColor& color, int pointSize, const std::string& fontFamily = "sans", int maxWidth = 0,
                                     int weight = 400 /* normal */);
 
+    // The height ONE line of text at this (fontFamily, pointSize) should
+    // occupy for LAYOUT purposes - unlike a real rendered texture's own
+    // height (see makeTextTexture() above), this is the SAME value for
+    // every string at that font/size, regardless of which characters it
+    // actually contains. Needed because Hyprland's own text renderer
+    // (IHyprRenderer::renderText(), Renderer.cpp) sizes each texture as
+    // `max(logical extent, ink extent)` - the ink extent is a TIGHT
+    // bounding box of the actually-painted pixels, which varies per
+    // string (a descender like "p"/"g"/"y" measures taller than a string
+    // without one), even at the identical font/size. Found live: a
+    // demo's two side-by-side, independently-stacked Columns (one of
+    // keys, one of descriptions) drifted out of row-alignment by a
+    // fraction of a pixel per row, becoming visible after enough rows,
+    // purely because sibling rows across the two columns happened to
+    // have different ink-extent heights.
+    //
+    // Computed by rendering a small FIXED reference string ("Ag" - a
+    // capital letter for a full ascender plus a lowercase descender, a
+    // common typographic reference pair) through the exact same
+    // renderText() pipeline every real text texture goes through, so the
+    // result reflects THIS font's actual metrics rather than a guessed
+    // multiplier - then discarding that texture and keeping only its
+    // height. Cached per (fontFamily, pointSize) pair - a real texture
+    // render happens ONCE per distinct combo ever used (typically a
+    // handful in any real config), never per widget instance or per
+    // frame. See CTextNode::rebuildTexture() for the one caller.
+    double naturalLineHeight(const std::string& fontFamily, int pointSize);
+
     // Decodes an image file (PNG/JPG/WEBP/SVG/AVIF/JXL - whatever the
     // installed `libhyprgraphics` supports) into a GPU texture, via
     // `Hyprgraphics::CImage` (`<hyprgraphics/image/Image.hpp>` - a

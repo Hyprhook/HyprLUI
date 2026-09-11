@@ -2651,6 +2651,104 @@ piece (raw-keysym limitation).
       now). Not tested live in a running compositor this session -
       build/`nm`/lint are clean; needs live confirmation.
 
+- [ ] **Phase 19** - Border/stroke support for widgets (and windows, via
+      their root widget - same "no distinction between a widget and its
+      window" principle as animation/`fill`, not a separate CCanvas-level
+      mechanism). Not started.
+    - **Found while auditing HyprLUI against the first real `demos/`
+      project** (a which-key-style popup, see its own plan/notes) - the
+      reference eww implementation being replicated has a mauve `border:
+      2px solid` around its panel, which `Box` currently can't express at
+      all: `CRectNode::render()` only ever calls `gfx::drawRect(box,
+      color, rounding)` - a flat fill, no separate stroke color/width.
+      Skipped for that demo's v1 (flat rounded background instead, no
+      border) rather than building this feature under demo time
+      pressure - tracked here to come back to deliberately.
+    - Likely shape: `borderColor`/`borderWidth` (name TBD) fields
+      alongside `color`/`rounding`, at minimum on `Box` - worth deciding
+      at implementation time whether this belongs on `CRectNode`
+      specifically or generalizes to a shared `CWidget`-level property
+      the way `padding`/`margin`/`opacity` already do (same question
+      `fill`/`style` each had to answer, and both ended up widget-
+      generic).
+    - Two candidate implementations, not yet chosen: (1) a real stroke-
+      drawing primitive in `gfx.cpp` (draws just the outline, whatever
+      Hyprland's own renderer offers for that - not yet investigated);
+      (2) the cheaper "two nested rects" trick (draw a slightly larger
+      rect in the border color, then the real fill-colored rect inset by
+      the border width, on top) entirely internal to `CRectNode::
+      render()` - no new `gfx.cpp` capability needed, just two draw calls
+      instead of one. Leaning toward (2) unless investigating (1) turns
+      up a reason it's meaningfully better (e.g. correctness at
+      fractional/rounded corners, where two-nested-rects could show
+      seams or double-antialiasing artifacts) - untested either way.
+
+- [x] **Phase 20** - `CTextNode`'s measured height standardized per
+      (font, point size), independent of string content.
+    - **Bug, found live building the which-key demo, initially "fixed" at
+      the demo level, then properly fixed at the engine level on
+      request** ("let's just do the real fix and tackle the underlying
+      issue"). Symptom: a two-column layout (one `Column` of keys, one
+      `Column` of descriptions, side by side) showed visibly drifting
+      row alignment by the last row.
+    - **Root cause, confirmed by reading Hyprland's own
+      `IHyprRenderer::renderText()` (`Renderer.cpp`)**: each text
+      texture's height is `std::max(rectLog.height, rectInk.y +
+      rectInk.height)` - the LOGICAL extent (`rectLog`, font-metric-
+      based, consistent across strings) vs. the INK extent (`rectInk`,
+      the tight bounding box of the actually-painted pixels, which DOES
+      vary - a string with a descender like "p"/"g"/"y" has taller ink
+      extents than one without). Hyprland takes whichever is larger, so
+      `CTextNode::m_size.y` (previously just the texture's own size)
+      inherited that same per-string variance. Two independently-
+      stacked `Column`s (each summing ITS OWN children's heights + a
+      fixed `gap`) drift apart by a fraction of a pixel per row,
+      becoming visible after enough rows even though row 1 lines up
+      exactly. Not a bug in `CFlexWidget`'s own layout math - `Column`/
+      `Row` faithfully stack whatever height each child actually
+      reports; the root inconsistency was upstream, in what "one line
+      of text" was allowed to measure as.
+    - **First pass (demo-level, insufficient on its own)**: restructured
+      `demos/which-key.lua` to one shared `Row` per key+description pair
+      instead of two parallel columns, so both cells share one parent
+      and can't drift apart ACROSS rows - plus switched to a monospace
+      font with manually left-padded key strings for right-alignment
+      (replacing `Column align="end"`). This closed the cross-column
+      drift specifically, but NOT a subtler residual issue: each Row's
+      OWN height still varied per-entry (`CFlexWidget::measureContent()`
+      taking `max(key height, desc height)` for that one row), so the
+      vertical rhythm between rows stayed slightly uneven wherever a
+      row's key/description happened to contain a descender. User
+      reported the issue was "still there" after this - correctly, since
+      this pass only addressed one of the two symptoms.
+    - **Real fix, engine-level**: new `gfx::naturalLineHeight(fontFamily,
+      pointSize)` (`gfx.hpp`/`.cpp`) - renders a small FIXED reference
+      string ("Ag", a capital letter for a full ascender plus a
+      lowercase descender - a common typographic reference pair)
+      through the exact same `renderText()` pipeline every real text
+      texture goes through, so the result reflects THAT font's actual
+      metrics rather than a guessed multiplier, then discards the
+      texture and keeps only its height. Cached per `(fontFamily,
+      pointSize)` pair in a static `unordered_map` - a real texture
+      render happens ONCE per distinct combo ever used across the
+      plugin's whole lifetime, never per widget instance or per frame.
+      `CTextNode::rebuildTexture()` (`TextNode.cpp`) now sets `m_size.x`
+      from the real texture (width SHOULD vary per string - that's what
+      lets containers size/wrap/truncate around real content) but
+      `m_size.y` from `naturalLineHeight()` instead of the texture's own
+      height. `render()` is UNCHANGED - it still draws the actual
+      texture at ITS OWN true size (`m_texture->m_size`), same as it
+      already did for width; only the LAYOUT footprint other widgets
+      pack against was standardized, not what actually gets drawn.
+    - **Demo reverted to its simpler, original two-Column structure**
+      (`Column align="end"` / `align="start"`, no monospace font, no
+      manual padding) once the engine fix landed - both because it's
+      genuinely simpler and because it doubles as a live check that the
+      real fix holds, not just the narrower demo-level one.
+    - Not re-tested live in a running compositor this session (same
+      caveat as everything else built this session) - build/`nm`/lint
+      are clean.
+
 ## Open questions
 
 - **Canvas damage tracking trusts `m_root->size()` to bound everything

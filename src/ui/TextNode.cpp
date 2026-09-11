@@ -17,8 +17,24 @@ namespace HyprLUI {
         const int maxWidth = m_maxW ? static_cast<int>(*m_maxW) : 0;
         m_texture          = gfx::makeTextTexture(m_text, m_color, m_pointSize, m_fontFamily, maxWidth);
 
-        if (m_texture)
-            m_size = m_texture->m_size;
+        if (m_texture) {
+            // Width tracks the actual rendered texture (this IS supposed
+            // to vary per string - "N" should measure narrower than
+            // "escape", that's what lets a container size/wrap/truncate
+            // around real content). Height does NOT come from the
+            // texture though - see gfx::naturalLineHeight()'s own doc
+            // comment (gfx.hpp) for why: Hyprland's own renderText() ties
+            // texture height to per-string ink extents (descenders like
+            // "p"/"g"/"y" measure taller), which would otherwise make
+            // this widget's LAYOUT footprint - what a Row/Column packs
+            // against - silently depend on which characters this string
+            // happens to contain. render() below still draws the actual
+            // texture at ITS OWN true size regardless (same as it
+            // already did for width) - only the footprint used for
+            // layout/alignment purposes is standardized here.
+            m_size.x = m_texture->m_size.x;
+            m_size.y = gfx::naturalLineHeight(m_fontFamily, m_pointSize);
+        }
 
         m_dirty = false;
     }
