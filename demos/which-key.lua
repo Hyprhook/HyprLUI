@@ -507,7 +507,7 @@ local function buildAndShow(submap, allBinds)
 	end
 end
 
-hl.on("keybinds.submap", function(submap)
+local function onSubmapChanged(submap)
 	activeSubmap = submap
 
 	if submap == "" then
@@ -528,7 +528,29 @@ hl.on("keybinds.submap", function(submap)
 	if not ok then
 		hyprluiWarn("hyprlui.run_cmd", err)
 	end
-end)
+end
+
+hl.on("keybinds.submap", onSubmapChanged)
+
+-- Config-reload consistency: Hyprland's active submap is live compositor
+-- state, untouched by a config reload - it does NOT fire a fresh
+-- "keybinds.submap" event just because the config re-evaluated (only a
+-- real transition does that). HyprLUI, on the other hand, closes every
+-- one of its own windows/canvases on every reload (see hyprlandd.lua's
+-- own note on config.preReload). Put together: reloading while the
+-- popup is open (e.g. saving an edit to this very file) would silently
+-- close it with no event left to reopen it - leaving the popup closed
+-- while Hyprland is still actually sitting in a submap. Re-sync here,
+-- once, at the end of this module's own reload - pull the REAL current
+-- submap directly (hl.get_current_submap(), always available, never
+-- errors - plain state, not an IPC round-trip) and replay the exact same
+-- path a live event would have taken if it's non-global.
+if hl.plugin.hyprlui ~= nil then
+	local ok, currentSubmap = pcall(hl.get_current_submap)
+	if ok and currentSubmap and currentSubmap ~= "" then
+		onSubmapChanged(currentSubmap)
+	end
+end
 
 --------------------------------------------------
 ---- self-contained test submaps ----
