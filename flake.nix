@@ -90,6 +90,8 @@
               postInstall = ''
                 mv $out/lib/HyprLUI.so $out/lib/libHyprLUI.so
                 install -D -m 0644 stubs/hyprlui.meta.lua $out/share/hypr/stubs/hyprlui.meta.lua
+                mkdir -p $out/share/hypr/hyprlui/demos
+                cp -r demos/. $out/share/hypr/hyprlui/demos/
               '';
 
               meta = with pkgs.lib; {
