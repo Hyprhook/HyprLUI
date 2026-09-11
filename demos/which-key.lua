@@ -337,6 +337,7 @@ local CONFIG = {
 	descSubmapColor = 0xffcba6f7,
 	font = "sans",
 	size = 13,
+	padding = 10,
 	animationIn = { speed = 3, bezier = "default", style = "slide bottom" },
 	animationOut = { speed = 3, bezier = "default", style = "slide bottom" },
 }
@@ -369,6 +370,7 @@ if hl.plugin.hyprlui ~= nil then
 			descSubmapColor = { default = CONFIG.descSubmapColor },
 			font = { default = CONFIG.font },
 			size = { default = CONFIG.size },
+			padding = { default = CONFIG.padding },
 			animationIn = { default = CONFIG.animationIn },
 			animationOut = { default = CONFIG.animationOut },
 		},
@@ -389,7 +391,7 @@ if hl.plugin.hyprlui ~= nil then
 			-- manual padding math, no forced monospace font) and because
 			-- it doubles as a live check that the actual engine fix
 			-- holds.
-			local columnsRow = hl.plugin.hyprlui.Row({ id = "columns", gap = 50, padding = 10 })
+			local columnsRow = hl.plugin.hyprlui.Row({ id = "columns", gap = 50, padding = props.padding })
 			for i, col in ipairs(props.columns) do
 				local keysColumn = hl.plugin.hyprlui.Column({ id = "keys_" .. i, align = "end", gap = 6 })
 				local descColumn = hl.plugin.hyprlui.Column({ id = "descs_" .. i, align = "start", gap = 6 })
@@ -435,6 +437,47 @@ local function closePopup()
 	pcall(hl.plugin.hyprlui.remove_canvas, WHICH_KEY_WINDOW)
 end
 
+-- Builds the popup's root widget from this submap's chunked bind entries
+-- (buildAndShow()'s `columns`) - the ONLY thing buildAndShow() itself
+-- needs back, so a caller wanting to render this completely differently
+-- (a different registered component, a different Component() key/opts, a
+-- hand-built widget tree with no Component() at all) only has to replace
+-- this one function, not fork buildAndShow(). Overridable via M.setup()
+-- below; defaults to this demo's own WhichKeyPopup component with
+-- CONFIG's values.
+local buildPopup = function(columns)
+	return hl.plugin.hyprlui.Component("WhichKeyPopup", {
+		columns = columns,
+		bgColor = CONFIG.bgColor,
+		keyColor = CONFIG.keyColor,
+		descColor = CONFIG.descColor,
+		descSubmapColor = CONFIG.descSubmapColor,
+		font = CONFIG.font,
+		size = CONFIG.size,
+		padding = CONFIG.padding,
+		animationIn = CONFIG.animationIn,
+		animationOut = CONFIG.animationOut,
+	}, { key = "popup" })
+end
+
+-- Call any time after require()'ing this module - order against
+-- M.test_binds()/the module's own always-active hl.on("keybinds.submap",
+-- ...) hook doesn't matter, since buildPopup/CONFIG.yOffset are only ever
+-- READ once a submap change actually fires a rebuild, never at require()
+-- time. Re-call this on every config reload alongside the require() that
+-- brings the module back in, same as M.test_binds() - the whole module
+-- (including CONFIG/buildPopup's defaults) re-evaluates from scratch
+-- every reload, so an override made before the last reload is gone.
+function M.setup(opts)
+	opts = opts or {}
+	if opts.buildPopup then
+		buildPopup = opts.buildPopup
+	end
+	if opts.yOffset then
+		CONFIG.yOffset = opts.yOffset
+	end
+end
+
 local function buildAndShow(submap, allBinds)
 	-- Stale async response from a submap we've since left - drop it (see
 	-- `activeSubmap`'s own doc comment above).
@@ -456,17 +499,7 @@ local function buildAndShow(submap, allBinds)
 			w = focusedMonitorWidth(),
 			x = 0,
 			y = CONFIG.yOffset,
-			hl.plugin.hyprlui.Component("WhichKeyPopup", {
-				columns = columns,
-				bgColor = CONFIG.bgColor,
-				keyColor = CONFIG.keyColor,
-				descColor = CONFIG.descColor,
-				descSubmapColor = CONFIG.descSubmapColor,
-				font = CONFIG.font,
-				size = CONFIG.size,
-				animationIn = CONFIG.animationIn,
-				animationOut = CONFIG.animationOut,
-			}, { key = "popup" }),
+			buildPopup(columns),
 		})
 	end)
 	if not ok then
