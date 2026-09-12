@@ -61,4 +61,5 @@ end
 -- re-require()s it on every config reload, so editing a demo file and
 -- saving takes effect live.
 local which_key = require("./demos/which-key")
+which_key.setup(opts)
 which_key.test_binds()
