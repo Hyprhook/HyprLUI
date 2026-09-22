@@ -25,8 +25,7 @@ namespace HyprLUI {
 
         // Blur BEFORE the widget tree is torn down below, so onBlur still
         // fires against a live CInputWidget - otherwise Lua's own idea of
-        // "is this focused" would silently go stale, the same class of
-        // desync as the config-reload issue documented in DESIGN.md.
+        // "is this focused" would silently go stale.
         if (m_focusedInput.canvasName == name)
             blurFocusedInput();
         // Same reasoning for hover - onHoverEnd should still fire against
@@ -94,11 +93,8 @@ namespace HyprLUI {
 
         // Checkbox keeps its own dedicated click() (toggles state, fires
         // onChange(bool) - a different shape from the generic no-arg
-        // onClick, see Widget.hpp's setOnClick() doc comment). Every
-        // other widget type, including Button now, goes through the
-        // generic fireClick() fallback - Button no longer needs its own
-        // dynamic_cast branch here since it stopped having a separate
-        // onClick mechanism of its own (Phase 10 follow-up, DESIGN.md).
+        // onClick). Every other widget type falls through to the generic
+        // fireClick().
         if (auto* checkbox = dynamic_cast<CCheckboxWidget*>(widget)) {
             checkbox->click();
             return true;
@@ -156,14 +152,10 @@ namespace HyprLUI {
 
         input->handleKey(keysym, pressed);
 
-        // Text content changing (built-in typing/Backspace capture, see
-        // CInputWidget::handleKey()) doesn't repaint on its own - same
-        // "content change needs an explicit damage()" contract set_text()
-        // already follows in LuaBridge.cpp. Damaged unconditionally per
-        // key rather than having handleKey() report back whether text
-        // actually changed - key events are rare relative to frame rate,
-        // matches this codebase's established "blunt but correct, don't
-        // build fine-grained invalidation" precedent (see damageAll()).
+        // Text content changing (built-in typing/Backspace capture) doesn't
+        // repaint on its own, same as set_text(). Damaged unconditionally
+        // per key rather than having handleKey() report back whether text
+        // actually changed - key events are rare relative to frame rate.
         canvas->damage();
         return true;
     }
@@ -219,18 +211,14 @@ namespace HyprLUI {
                 canvas->render();
         }
 
-        // Ticked once per real frame here (RENDER_LAST_MOMENT fires
-        // unconditionally every frame, per monitor, regardless of whether
-        // HyprLUI has any overlay content). A rootless pending-removal
+        // Ticked once per real frame here. A rootless pending-removal
         // canvas's render() only runs its redamage countdown and draws
-        // nothing. A canvas removed WHILE a fade-out (Phase 13) is
-        // enabled is different: removeCanvas() calls setVisible(false)
-        // on it, which keeps m_visible true (and therefore still
-        // actually rendering, fading down) for the whole animation -
-        // render()'s own continuous self-damaging while animating (see
-        // Canvas.cpp) keeps hasPendingRedamage() true for exactly that
-        // long, so this sweep naturally doesn't drop it early. Swept out
-        // once the countdown (and any fade) has actually finished.
+        // nothing. A canvas removed while a fade-out is enabled is
+        // different: removeCanvas() calls setVisible(false) on it, which
+        // keeps m_visible true (still actually rendering, fading down) for
+        // the whole animation - render()'s own continuous self-damaging
+        // while animating keeps hasPendingRedamage() true for exactly
+        // that long, so this sweep doesn't drop it early.
         for (const auto& canvas : m_pendingRemoval)
             canvas->render();
         std::erase_if(m_pendingRemoval, [](const PCanvas& c) { return !c->hasPendingRedamage(); });

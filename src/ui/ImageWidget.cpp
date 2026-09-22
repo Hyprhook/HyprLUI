@@ -15,9 +15,8 @@ namespace HyprLUI {
 
         // boxAt(origin, scale) - NOT the texture's native size -
         // deliberately unlike CTextNode::render(): stretching an image to
-        // fill an explicit fixed w/h is the expected/desired behavior here
-        // (see ImageWidget.hpp's doc comment), so the layout box IS the
-        // draw box.
+        // fill an explicit fixed w/h is the expected/desired behavior
+        // here, so the layout box IS the draw box.
         gfx::drawTexture(m_texture, boxAt(origin, scale), opacity, m_rounding);
 
         if (m_borderWidth > 0)

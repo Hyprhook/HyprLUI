@@ -11,12 +11,10 @@ namespace HyprLUI {
         m_size = size;
 
         // Small fixed left inset by default so text doesn't touch the
-        // very edge - now expressed as ordinary Phase 7 `padding` (left
-        // only) rather than baked directly into the label's position, so
-        // a Lua-supplied `padding` field (applied via setPadding() after
-        // construction, see LuaBridge.cpp) overrides it like any other
-        // widget's padding. arrangeChildren() below is what actually
-        // positions the label FROM padding() every frame.
+        // very edge - expressed as ordinary `padding` (left only) rather
+        // than baked into the label's position, so a Lua-supplied
+        // `padding` overrides it like any other widget's. arrangeChildren()
+        // below positions the label FROM padding() every frame.
         setPadding({.left = 8});
 
         // Added via addChild() (not kept purely internal) so it goes
@@ -67,12 +65,10 @@ namespace HyprLUI {
             bool changed = false;
 
             // Backspace and printable ASCII (0x20-0x7e) are the entire
-            // v1 built-in vocabulary - see InputWidget.hpp's doc comment
-            // for why (no cursor/selection/IME/non-ASCII, layer that on
-            // top of onKey below if needed). X11/xkb keysyms mirror ASCII
-            // in this range, and Shift is already baked into the keysym
-            // by the time it reaches here, so no separate case-handling
-            // is needed for e.g. Shift+A vs a.
+            // built-in vocabulary. X11/xkb keysyms mirror ASCII in this
+            // range, and Shift is already baked into the keysym by the
+            // time it reaches here, so no separate case-handling is
+            // needed for e.g. Shift+A vs a.
             if (keysym == XKB_KEY_BackSpace) {
                 if (!m_text.empty()) {
                     m_text.pop_back();

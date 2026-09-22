@@ -36,10 +36,8 @@ namespace HyprLUI {
       private:
         CHyprColor m_color;
         int        m_rounding;
-        // Phase 19 - see gfx::drawBorder()'s own doc comment for the
-        // border-box (inset, not window-style outward-growing) model
-        // this draws under. Zero-width (the default) draws nothing -
-        // every existing Box caller stays a plain flat fill.
+        // See gfx::drawBorder() for the border-box model this draws
+        // under. Zero-width (the default) draws nothing.
         Config::CGradientValueData m_borderColor;
         int                        m_borderWidth;
     };

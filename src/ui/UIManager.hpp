@@ -22,12 +22,11 @@ namespace HyprLUI {
 
     // Result of CUIManager::hitTestWidget() - `canvasName` empty means
     // nothing interactive was hit. Named (rather than an anonymous pair)
-    // since it's meant to be re-hit-tested-against and compared by
-    // InputHook.cpp across a press/release pair, and stored as
-    // CUIManager's m_focusedInput - a plain pair<string,string> reads
-    // ambiguously at those call sites. Covers both CButtonWidget and
-    // CInputWidget hits (CWidget::hitTest() doesn't distinguish which
-    // interactive type it found - the caller dynamic_casts to find out).
+    // since it's re-hit-tested and compared by InputHook.cpp across a
+    // press/release pair, and stored as CUIManager's m_focusedInput.
+    // Covers both CButtonWidget and CInputWidget hits - CWidget::hitTest()
+    // doesn't distinguish which interactive type it found, the caller
+    // dynamic_casts to find out.
     struct SWidgetHit {
         std::string canvasName;
         std::string widgetId;
@@ -45,82 +44,60 @@ namespace HyprLUI {
         // --- Canvas management ---------------------------------------
         PCanvas createCanvas(const std::string& name, const Vector2D& position, const Vector2D& size, EZOrder zorder = EZOrder::Overlay);
 
-        // Removes a canvas from Lua's perspective immediately (the name is
-        // free to reuse right away, hasCanvas()/getCanvas() stop seeing
-        // it), but keeps the underlying CCanvas alive a few more frames in
-        // m_pendingRemoval purely to finish clearing its old on-screen
-        // footprint - see CCanvas::damage()'s doc comment for why a single
-        // damage-then-destroy isn't enough on its own. If a fade-out
-        // animation (Phase 13) is enabled, it's kept alive for the whole
-        // fade instead (still actually rendering, fading down) - see
-        // CUIManager::renderOverlay()'s own comment on m_pendingRemoval.
+        // Removes a canvas from Lua's perspective immediately (name is free
+        // to reuse right away, hasCanvas()/getCanvas() stop seeing it), but
+        // keeps the underlying CCanvas alive a few more frames in
+        // m_pendingRemoval to finish clearing its old on-screen footprint -
+        // or, if a fade-out animation is enabled, for the whole fade
+        // instead (still actually rendering, fading down).
         void    removeCanvas(const std::string& name);
         bool    hasCanvas(const std::string& name) const;
         PCanvas getCanvas(const std::string& name) const;
 
-        // Damages every canvas that currently exists. Blunt but correct:
-        // called whenever a watcher's value actually changes (see
-        // CWatcherManager::notify()), which has no idea which specific
-        // canvases reference that watcher - matches the "don't build
-        // fine-grained invalidation" precedent for this HUD-scale toolkit.
+        // Damages every canvas that currently exists. Blunt but correct -
+        // called whenever a watcher's value changes, which has no idea
+        // which specific canvases reference that watcher.
         void damageAll();
 
         // --- Input -------------------------------------------------------
-        // Finds the topmost interactive (CButtonWidget, CInputWidget, or
-        // CCheckboxWidget) hit at global point `pt`, searching only
-        // Overlay-zorder, currently-visible canvases, newest-created
-        // first. Background canvases are explicitly decorative/
-        // occludable-by-real-windows (see EZOrder's doc comment) - not
-        // click targets. Empty result (SWidgetHit::empty()) if nothing was
-        // hit; used by InputHook.cpp for both the initial press hit-test
-        // and the matching re-test at release.
+        // Finds the topmost interactive widget hit at global point `pt`,
+        // searching only Overlay-zorder, currently-visible canvases,
+        // newest-created first. Background canvases are decorative, not
+        // click targets. Empty result if nothing was hit - used by
+        // InputHook.cpp for both the initial press hit-test and the
+        // matching re-test at release.
         SWidgetHit hitTestWidget(const Vector2D& pt) const;
 
         // Invokes a real click on the widget named `widgetId` on canvas
         // `canvasName`, if both still exist and the widget actually
-        // resolved as a hit in the first place (false, no-op, otherwise -
-        // e.g. an Input, which grabs focus on PRESS instead, see
-        // handlePressFocus(), never reaches here as a "click"). Checkbox
-        // gets its own dynamic_cast branch (toggle then invoke
-        // onChange(bool) with the new value - a different shape from a
-        // plain onClick); every other widget type falls through to the
-        // generic CWidget::fireClick() (Phase 10 follow-up, DESIGN.md) -
-        // onClick is a base-CWidget field now, not Button-specific,
-        // though only a widget that ever actually resolves as a
-        // hitTestWidget() hit can reach this call in the first place (see
-        // Widget.hpp's own hitTest()/isInteractive() defaults for what
-        // makes a plain Box/Text/etc. become one: having onClick set at
-        // all). Called by InputHook.cpp once a press and its matching
-        // release both resolve to the same SWidgetHit.
+        // resolved as a hit in the first place (false, no-op, otherwise).
+        // Checkbox gets its own dynamic_cast branch (toggle then invoke
+        // onChange(bool) - a different shape from a plain onClick); every
+        // other widget type falls through to the generic
+        // CWidget::fireClick(). Called by InputHook.cpp once a press and
+        // its matching release both resolve to the same SWidgetHit.
         bool clickWidget(const std::string& canvasName, const std::string& widgetId);
 
         // --- Keyboard focus (Input widgets) ------------------------------
         // Exactly one Input across every HyprLUI window can hold HyprLUI's
-        // own keyboard focus at a time (there's only one real keyboard),
-        // tracked as m_focusedInput below - entirely separate from
-        // Hyprland's actual Wayland keyboard-focus-surface concept, since
-        // HyprLUI canvases aren't real surfaces (see DESIGN.md Phase 6).
+        // own keyboard focus at a time, tracked as m_focusedInput below -
+        // entirely separate from Hyprland's actual Wayland keyboard-focus
+        // concept, since HyprLUI canvases aren't real surfaces.
 
         // Focuses the Input widget named `widgetId` on canvas
-        // `canvasName`, blurring whatever was previously focused first
-        // (a no-op re-blur/re-focus if it's already this exact widget -
-        // doesn't re-fire onFocus). Returns false (no state change) if no
-        // such canvas/widget exists, it isn't actually a CInputWidget, or
-        // it's disabled (Phase 10 - a disabled Input can't be focused,
-        // neither by click - hitTest() already excludes it, see
-        // InputWidget.hpp - nor programmatically through this same call).
-        // Called both from InputHook.cpp's click-to-focus handling and
-        // directly from Lua (hyprlui.focus_widget) for programmatic focus.
+        // `canvasName`, blurring whatever was previously focused first (a
+        // no-op if it's already this exact widget). Returns false if no
+        // such canvas/widget exists, it isn't a CInputWidget, or it's
+        // disabled. Called both from InputHook.cpp's click-to-focus
+        // handling and directly from Lua (hyprlui.focus_widget).
         bool focusWidget(const std::string& canvasName, const std::string& widgetId);
 
-        // Blurs whichever Input currently has focus, if any (no-op
-        // otherwise). Called from Lua (hyprlui.blur_widget), from
-        // InputHook.cpp on a click that lands elsewhere, and internally
-        // whenever the focused widget/canvas is about to be destroyed or
-        // hidden, so onBlur always fires before a widget disappears out
-        // from under Lua's own idea of "what's focused" - see
-        // DESIGN.md's config-reload lifecycle notes for the class of bug
-        // this sidesteps.
+        // Blurs whichever Input currently has focus, if any. Called from
+        // Lua (hyprlui.blur_widget), from InputHook.cpp on a click landing
+        // elsewhere, and internally whenever the focused widget/canvas is
+        // about to be destroyed or hidden, so onBlur always fires before a
+        // widget disappears out from under Lua's own idea of "what's
+        // focused."
         void blurFocusedInput();
 
         bool isFocused(const std::string& canvasName, const std::string& widgetId) const {
@@ -136,36 +113,27 @@ namespace HyprLUI {
         }
 
         // Forwards a key event to the focused Input, if any (no-op,
-        // returns false, if nothing is focused). Always swallows the
-        // event when something is focused - InputHook.cpp already
-        // filtered out anything that's actually a real Hyprland keybind
-        // before ever calling this (see its doc comment), so by the time
-        // a key reaches here it's guaranteed local to this Input: it
-        // shouldn't leak through to whatever real window has actual
-        // Wayland keyboard focus behind it either. Called once per key
-        // event from InputHook.cpp.
+        // returns false, if nothing is focused). Always swallows the event
+        // when something is focused - InputHook.cpp already filtered out
+        // anything that's a real Hyprland keybind before calling this, so
+        // a key reaching here is guaranteed local to this Input. Called
+        // once per key event from InputHook.cpp.
         bool dispatchKey(uint32_t keysym, bool pressed);
 
         // Press-time focus transition for InputHook.cpp's click handling:
         // clicking the already-focused Input again is a no-op; clicking
-        // anything else (a different Input, a Button, empty space) blurs
-        // whatever was focused, then focuses `hit` if it resolves to an
-        // Input (no-op focus attempt otherwise, e.g. a Button click just
-        // blurs and stops there).
+        // anything else blurs whatever was focused, then focuses `hit` if
+        // it resolves to an Input.
         void handlePressFocus(const SWidgetHit& hit);
 
-        // --- Hover + scroll (Phase 10) -----------------------------------
-        // A single global "currently hovered" slot, same "compared by
-        // value, not a raw pointer" shape as m_focusedInput - there's only
-        // one real pointer, so only one widget can be hovered at a time.
-        // Called by InputHook.cpp's new mouse.move handler on every move,
-        // with the result of the SAME hitTestWidget() click-hit-testing
-        // already uses (a disabled widget's hitTest() already excludes it,
-        // so it can never resolve as the hovered one either). No-op if
-        // `hit` is already the currently-hovered widget; otherwise calls
-        // setHovered(false) on the old one (if any) and setHovered(true)
-        // on the new one (if any) - each of those fires that widget's own
-        // onHoverStart/onHoverEnd as a side effect (see Widget.hpp).
+        // --- Hover + scroll -----------------------------------
+        // A single global "currently hovered" slot, same shape as
+        // m_focusedInput - only one widget can be hovered at a time.
+        // Called by InputHook.cpp's mouse.move handler with the result of
+        // the same hitTestWidget() click-hit-testing already uses. No-op
+        // if `hit` is already the currently-hovered widget; otherwise
+        // fires setHovered(false)/setHovered(true) on the old/new widget
+        // (each fires that widget's own onHoverStart/onHoverEnd).
         void updateHover(const SWidgetHit& hit);
 
         bool isHovered(const std::string& canvasName, const std::string& widgetId) const {
@@ -173,11 +141,9 @@ namespace HyprLUI {
         }
 
         // Forwards a scroll event to the widget at `canvasName`/`widgetId`
-        // (already resolved by InputHook.cpp's hitTestWidget() call) if it
-        // has an onScroll handler set - returns whether it actually fired
-        // one, which is what InputHook.cpp uses to decide whether to
-        // cancel the underlying mouse.axis event (only ever swallowed if
-        // something was actually listening - see CWidget::fireScroll()).
+        // if it has an onScroll handler set - returns whether it actually
+        // fired one, which InputHook.cpp uses to decide whether to cancel
+        // the underlying mouse.axis event.
         bool dispatchScroll(const std::string& canvasName, const std::string& widgetId, double delta, bool vertical);
 
         // --- Frame lifecycle --------------------------------------------

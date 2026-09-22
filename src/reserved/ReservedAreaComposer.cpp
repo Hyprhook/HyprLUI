@@ -54,17 +54,9 @@ namespace HyprLUI {
         for (const auto& [name, c] : m_contributions)
             monitorNames.insert(c.monitorName);
 
-        // force=true: something external (config reload, monitor hotplug/
-        // reconfig) may have overwritten the monitor's static tier out
-        // from under us - e.g. CMonitor::applyMonitorRuleSoft() re-runs
-        // setStatic(configBaseline) on every reload, wiping our own prior
-        // contribution. That means the NUMBER we'd recompute today can be
-        // identical to what's cached in m_lastApplied (baseline and our
-        // own sum are both unchanged) even though what's actually LIVE on
-        // the monitor no longer matches that cache - recompute()'s normal
-        // diff-check would then wrongly skip the write. reapplyAll()'s
-        // entire purpose is "resync regardless", so it has to bypass that
-        // optimization, not just recompute the same number again.
+        // force=true: reapplyAll()'s whole purpose is "resync regardless"
+        // - the number we'd recompute can match the cache even when the
+        // live value doesn't, since an external event just reset it.
         for (const auto& monitorName : monitorNames)
             recompute(monitorName, /* force = */ true);
     }
@@ -100,10 +92,9 @@ namespace HyprLUI {
             }
         }
 
-        // Read the user's true config baseline fresh from the monitor's
-        // active rule every time - NOT from the live m_reservedArea,
-        // which would already include our own previous write and double-
-        // count it. See this file's header comment for why.
+        // Read the config baseline fresh from the monitor's active rule -
+        // NOT the live m_reservedArea, which would already include our
+        // own previous write and double-count it.
         const auto&  baseline  = monitor->m_activeMonitorRule.m_reservedArea;
         const double newTop    = baseline.top() + top;
         const double newRight  = baseline.right() + right;
@@ -117,14 +108,9 @@ namespace HyprLUI {
         monitor->m_reservedArea.setStatic(Desktop::CReservedArea(newTop, newRight, newBottom, newLeft));
         last = {newTop, newRight, newBottom, newLeft, true};
 
-        // setStatic() only changes the box future placement decisions
-        // will use - it does NOT itself move/resize windows that are
-        // already tiled on this monitor. Hyprland's own monitor-rule-
-        // apply path always follows a reserved-area change with exactly
-        // this call (e.g. CMonitor::onConnect(), Monitor.cpp:368) to
-        // force existing tiled windows to re-layout against the new
-        // available space right now, instead of only affecting the next
-        // window that happens to get tiled.
+        // setStatic() only changes the box FUTURE placement decisions
+        // will use - it does not itself move/resize already-tiled
+        // windows, so this forces a relayout against the new space now.
         if (g_layoutManager)
             g_layoutManager->recalculateMonitor(monitor);
     }
@@ -132,19 +118,10 @@ namespace HyprLUI {
     void CReservedAreaComposer::registerHooks(HANDLE handle) {
         g_layoutChangedListener = Event::bus()->m_events.monitor.layoutChanged.listen([]() { CReservedAreaComposer::get().reapplyAll(); });
 
-        // Confirmed live (user report): resolving a Lua config eval error
-        // - the scenario that made Hyprland's own error/debug overlay
-        // worth checking against in the first place - means Hyprland
-        // re-evaluates the config, which calls CMonitor::
-        // applyMonitorRuleSoft() again and wipes our static-tier
-        // contribution back to just the fresh config baseline
-        // (Monitor.cpp:673-675). That's a config reload, not a monitor
-        // layout change - monitor.layoutChanged is emitted from entirely
-        // different places (Monitor.cpp:1422, MonitorLayoutController.cpp:
-        // 75 - monitor geometry/hotplug, not config application) and
-        // never fires for this. Event::bus()->m_events.config.reloaded
-        // (EventBus.hpp:183) is the one that actually corresponds to what
-        // just happened here.
+        // A config reload (e.g. resolving a Lua eval error) also wipes our
+        // static-tier contribution, but is a genuinely different event
+        // from monitor.layoutChanged (geometry/hotplug only) - both are
+        // needed.
         g_configReloadedListener = Event::bus()->m_events.config.reloaded.listen([]() { CReservedAreaComposer::get().reapplyAll(); });
     }
 

@@ -23,11 +23,8 @@ using namespace Hyprutils::OS;
 
 namespace HyprLUI {
 
-    // How often the poll timers below check readiness - see
-    // NativeServices.hpp's file-level comment for why this polls instead
-    // of using CEventLoopManager::doOnReadable(). 16ms keeps a command's
-    // output or a socket message feeling instant for UI purposes without
-    // being a busy-loop.
+    // 16ms keeps a command's output or a socket message feeling instant
+    // without being a busy-loop.
     static constexpr auto POLL_INTERVAL = std::chrono::milliseconds(16);
 
     namespace {
@@ -229,10 +226,8 @@ namespace HyprLUI {
         addr.sun_family = AF_UNIX;
         strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
 
-        // Blocking connect() - deliberate, see NativeServices.hpp's doc
-        // comment on openSocket(): realistically instant for a local
-        // Unix domain socket, unlike a network connect() (which Phase 12
-        // explicitly excludes - Unix domain sockets only).
+        // Blocking connect() - deliberate, realistically instant for a
+        // local Unix domain socket.
         if (connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
             Log::logger->log(Log::WARN, "[hyprlui] open_socket('{}'): connect() failed: {}", path, strerror(errno));
             close(fd);

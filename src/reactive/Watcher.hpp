@@ -9,21 +9,13 @@
 //
 // Polling reaches into Hyprland's internal event-loop timer
 // (CEventLoopTimer / g_pEventLoopManager) - there is no stable
-// HyprlandAPI:: timer surface (checked: PluginAPI.hpp exposes nothing
-// timer-shaped). This mirrors exactly what Hyprland's own hl.timer() Lua
-// binding does internally (src/config/lua/bindings/LuaBindingsToplevel.cpp,
-// hlTimer()) - same primitive, same re-arm-via-updateTimeout() pattern.
-// Internal API, not guaranteed stable across Hyprland releases - kept
-// isolated to this file for exactly that reason, same reasoning as
-// src/render/gfx.cpp for the rendering internals.
+// HyprlandAPI:: timer surface. Internal API, not guaranteed stable across
+// Hyprland releases - kept isolated to this file for that reason.
 //
 // CWatcherManager has no idea which widgets/canvases are bound to what -
-// a value actually changing just prompts a blunt "damage every canvas"
-// (CUIManager::damageAll()), and each canvas re-reads whatever it's bound
-// to fresh every frame (CCanvas::m_bindings, applied at the top of
-// render()). Simplest correct thing at HUD scale - matches this project's
-// established "redo it every frame rather than build fine-grained
-// invalidation" precedent (see DESIGN.md).
+// a value actually changing just prompts a blunt "damage every canvas",
+// and each canvas re-reads whatever it's bound to fresh every frame.
+// Simplest correct thing at HUD scale.
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
 #include <hyprland/src/helpers/memory/Memory.hpp>
@@ -40,25 +32,16 @@ namespace HyprLUI {
       public:
         static CWatcherManager& get();
 
-        // `L` is the Lua state to call `fnRef` on. **Correction (Phase
-        // 11, DESIGN.md)**: this comment used to claim Hyprland's Lua
-        // config "runs in a single persistent lua_State for the
-        // compositor's whole lifetime" - verified false while
-        // implementing hyprlui.persistent(): CConfigManager::reload()
-        // unconditionally calls reinitLuaState() on EVERY reload, which
-        // does lua_close(m_lua) then m_lua = luaL_newstate() - a
-        // genuinely fresh interpreter each time, not the same one kept
-        // alive. This class gets away with holding `L`/`fnRef` across a
-        // reload anyway ONLY because clear() runs on config.preReload
-        // (see registerHooks() in main.cpp), which fires strictly BEFORE
-        // reinitLuaState() destroys the old state - every ref this class
-        // holds is released while it's still valid, so nothing here ever
-        // ends up dereferencing a dangling one into a freed interpreter.
-        // `fnRef` is a LUA_REGISTRYINDEX reference (luaL_ref) to the
-        // watcher function - caller creates it, this class owns releasing
-        // it (see clear()). `intervalMs`, if given, arms a repeating
-        // timer that also calls notify() on that cadence. luaL_errors
-        // (never returns) if `name` is already registered.
+        // `L` is the Lua state to call `fnRef` on. Note: a config reload
+        // fully destroys and recreates the Lua state - this class only
+        // gets away with holding `L`/`fnRef` across one because clear()
+        // runs on config.preReload, strictly before the old state is
+        // destroyed, releasing every ref while it's still valid.
+        // `fnRef` is a LUA_REGISTRYINDEX reference to the watcher function
+        // - caller creates it, this class owns releasing it (see clear()).
+        // `intervalMs`, if given, arms a repeating timer that also calls
+        // notify() on that cadence. luaL_errors if `name` is already
+        // registered.
         void registerWatcher(lua_State* L, const std::string& name, int fnRef, std::optional<int> intervalMs);
 
         // Re-invokes the watcher's function now and updates its cached

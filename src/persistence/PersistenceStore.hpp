@@ -2,36 +2,16 @@
 //
 // PersistenceStore.hpp
 //
-// Phase 11 (DESIGN.md): hyprlui.persistent(key, default) - a native C++
-// key-value store that survives Lua config reloads, for state a user
-// explicitly wants to KEEP across a reload (as opposed to declaratively-
-// recreated UI, which is fine to lose - see the "General plugin-lifecycle
-// bug" note earlier in DESIGN.md).
+// hyprlui.persistent(key, default) - a native C++ key-value store that
+// survives Lua config reloads, for state a user explicitly wants to keep
+// across one. A real native re-encoding is required, not just a kept Lua
+// reference: a config reload fully destroys and recreates the Lua
+// interpreter (registry included), so there is no "the persistent
+// lua_State" to hold a ref into across that boundary.
 //
-// Why this needs to be a REAL native re-encoding, not just a kept Lua
-// reference: verified against Hyprland's own source before implementing
-// (same practice as every internal-API-reliant phase) that
-// CConfigManager::reload() unconditionally calls reinitLuaState() on
-// EVERY reload, which does `lua_close(m_lua)` then
-// `m_lua = luaL_newstate()` - the entire Lua interpreter, including its
-// registry, is destroyed and a fresh one created each time. There is no
-// "the persistent lua_State" to hold a LUA_REGISTRYINDEX ref into across
-// a reload boundary - by the time the fresh script runs, the old
-// interpreter (and everything that was only ever a reference INTO it) is
-// gone. (This also means an older doc comment in Watcher.hpp claiming
-// Hyprland's Lua config "runs in a single persistent lua_State for the
-// compositor's whole lifetime" was factually wrong - harmless in
-// practice only because CWatcherManager clears every Lua ref it holds on
-// config.preReload, which fires before the old state is destroyed, so
-// nothing there ever dereferences a dangling one - see that file's
-// corrected comment.)
-//
-// Scope, decided up front (asked explicitly, not assumed): survives a
-// config reload (the plugin process keeps running) but NOT a full plugin
-// unload or Hyprland restart - a pure in-memory store, no disk I/O.
-// Values are scalars only (number/string/boolean) - covers the realistic
-// "a volume level, a theme name, a toggle" use case without needing
-// recursive table encode/decode.
+// Survives a config reload (the plugin process keeps running) but NOT a
+// full plugin unload or Hyprland restart - a pure in-memory store, no disk
+// I/O. Values are scalars only (number/string/boolean).
 
 #include <string>
 #include <unordered_map>
@@ -50,39 +30,26 @@ namespace HyprLUI {
       public:
         static CPersistenceStore& get();
 
-        // Used by hyprlui.persistent(key, default) itself: if `key` isn't
-        // stored yet, seeds it with `def` and returns `def`. If it's
-        // already stored, returns the EXISTING value regardless of `def`
-        // - `def` is only ever consulted the very first time nothing was
-        // stored yet, never enforced afterwards. If the existing value's
-        // type differs from `def`'s type, logs a warning (Log::WARN, not
-        // luaL_error - permissive, per the explicit call on this) but
-        // still returns the existing value unchanged either way.
+        // If `key` isn't stored yet, seeds it with `def` and returns
+        // `def`. If already stored, returns the EXISTING value regardless
+        // of `def` (which is only consulted the first time). Logs a
+        // warning, but still returns the existing value, if the stored
+        // type differs from `def`'s type.
         PersistentValue getOrInit(const std::string& key, const PersistentValue& def);
 
-        // Used by the wrapper table's :get() method - a plain lookup, no
-        // default/warning logic (that already happened at the
-        // getOrInit() call the owning persistent() call made). Returns
-        // `false` (an arbitrary but harmless placeholder) if `key`
-        // somehow isn't present - shouldn't happen in practice, since
-        // persistent() always seeds it first, but this avoids needing an
-        // optional/error path for a case that's already structurally
-        // prevented.
+        // Plain lookup, no default/warning logic. Returns `false` if
+        // `key` isn't present (shouldn't happen - persistent() always
+        // seeds it first via getOrInit()).
         PersistentValue getRaw(const std::string& key) const;
 
-        // Used by the wrapper table's :set(value) method - overwrites
-        // unconditionally, including changing the value's type freely
-        // (only getOrInit()'s own re-seed-attempt path warns on a type
-        // mismatch, never an explicit set() - the caller asking to change
-        // the value, possibly to a new type, is assumed deliberate).
+        // Overwrites unconditionally, including changing the value's type
+        // freely - an explicit set() is assumed deliberate.
         void set(const std::string& key, const PersistentValue& value);
 
-        // Clears every stored value - call ONLY from PLUGIN_EXIT (a real
-        // unload), deliberately NEVER from config.preReload's
-        // resetAllState() the way every other manager in this codebase
-        // is - surviving exactly that reload is this whole class's
-        // reason to exist. Do not "fix" this into resetAllState() to
-        // match the other managers; that would defeat the feature.
+        // Clears every stored value - call ONLY from PLUGIN_EXIT. NEVER
+        // wire this into config.preReload like every other manager's
+        // clear() - surviving a reload is this class's whole reason to
+        // exist.
         void clear();
 
       private:

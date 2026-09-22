@@ -1,8 +1,7 @@
 #include "ComponentRegistry.hpp"
 
-// Same reasoning as LuaBridge.cpp's own extern "C" wrap - this Lua build's
-// headers aren't self-guarding, so including them unwrapped here would get
-// every lua_*/luaL_* call C++-mangled and fail to resolve at plugin load.
+// This Lua build's headers aren't self-guarding, so including them
+// unwrapped would get every lua_*/luaL_* call C++-mangled.
 extern "C" {
 #include <lua.h>
 #include <lauxlib.h>
@@ -14,14 +13,10 @@ namespace HyprLUI {
 
     namespace {
         // Rewrites `id` fields in-place on the widget-spec table at
-        // `tableIdx` (and recursively into its positional/ipairs-style
-        // children) - the root's own id becomes exactly `prefix` (the
-        // instance key, no suffix - see instantiate()'s doc comment for
-        // why: it's what lets a caller address "the whole instance" with
-        // just the key), every descendant's EXPLICIT id becomes
+        // `tableIdx` and its children: the root's own id becomes exactly
+        // `prefix`; every descendant's explicit id becomes
         // `prefix + "::" + originalId`. A child with no explicit id is
-        // left untouched - buildWidget()'s own __autoN fallback still
-        // applies to it later, unaffected.
+        // left untouched.
         void rewriteIds(lua_State* L, int tableIdx, const std::string& prefix, bool isRoot) {
             tableIdx = lua_absindex(L, tableIdx);
 
@@ -66,13 +61,9 @@ namespace HyprLUI {
         if (schemaIdx != 0) {
             schemaIdx = lua_absindex(L, schemaIdx);
 
-            // Standard lua_next traversal - safe here because every key is
-            // checked to already be a string (lua_type, not lua_tostring)
-            // BEFORE ever calling lua_tostring on it; calling lua_tostring
-            // on a value that's already a string never converts/mutates
-            // it in place, which is the specific thing that would corrupt
-            // an in-progress lua_next traversal (per the Lua manual - the
-            // danger is only ever converting a NON-string key).
+            // Safe lua_next traversal: every key is checked to already be
+            // a string before calling lua_tostring on it, which the Lua
+            // manual requires to avoid corrupting the traversal.
             lua_pushnil(L);
             while (lua_next(L, schemaIdx) != 0) {
                 if (lua_type(L, -2) != LUA_TSTRING)
@@ -121,8 +112,8 @@ namespace HyprLUI {
         if (optsIdx != 0)
             optsIdx = lua_absindex(L, optsIdx);
 
-        // --- Build the validated props table (schema defaults applied,
-        // required fields enforced) -------------------------------------
+        // Build the validated props table (schema defaults applied,
+        // required fields enforced).
         lua_newtable(L);
         const int validatedIdx = lua_gettop(L);
 
@@ -147,9 +138,7 @@ namespace HyprLUI {
             }
         }
 
-        // Reject any prop the schema doesn't know about - typo
-        // protection, same "fail loud on developer mistakes" convention
-        // as everywhere else in LuaBridge.cpp.
+        // Reject any prop the schema doesn't know about - typo protection.
         if (propsIdx != 0) {
             lua_pushnil(L);
             while (lua_next(L, propsIdx) != 0) {
@@ -162,11 +151,8 @@ namespace HyprLUI {
             }
         }
 
-        // --- Call render(validatedProps) - lua_call, not lua_pcall: a
-        // broken component definition is a structural config bug, same
-        // build-time-failure class as a missing required field on any
-        // other widget, not a caught/logged runtime interaction failure
-        // like onClick/onChange (see ComponentRegistry.hpp) -------------
+        // lua_call, not lua_pcall - a broken component definition is a
+        // build-time failure, not a caught/logged runtime one.
         lua_rawgeti(L, LUA_REGISTRYINDEX, def.renderFnRef);
         lua_pushvalue(L, validatedIdx);
         lua_call(L, 1, 1);
@@ -180,7 +166,7 @@ namespace HyprLUI {
         if (!isWidget)
             luaL_error(L, "hyprlui.Component('%s'): render() must return a single widget (e.g. hyprlui.Box{...}), got a plain table", name.c_str());
 
-        // --- Instance key: opts.key if given, else an auto-generated one
+        // Instance key: opts.key if given, else an auto-generated one.
         std::string key;
         if (optsIdx != 0) {
             lua_getfield(L, optsIdx, "key");
@@ -193,10 +179,8 @@ namespace HyprLUI {
 
         rewriteIds(L, resultIdx, key, /* isRoot = */ true);
 
-        // --- Overlay opts (everything except `key`, already consumed)
-        // onto the root - x/y/visible/padding/opacity/etc, same fields
-        // every other widget already accepts at its call site, applied
-        // here rather than requiring render() to hardcode/forward them.
+        // Overlay opts (everything except `key`, already consumed) onto
+        // the root.
         if (optsIdx != 0) {
             lua_pushnil(L);
             while (lua_next(L, optsIdx) != 0) {
@@ -211,10 +195,7 @@ namespace HyprLUI {
             }
         }
 
-        // Drop the now-unneeded validated-props table, leaving exactly
-        // the (id-rewritten, opts-overlaid) result table on top - what
-        // LuaBridge.cpp's luaComponent() returns to the caller.
-        lua_remove(L, validatedIdx);
+        lua_remove(L, validatedIdx); // drop the now-unneeded validated-props table
     }
 
     void CComponentRegistry::clear() {

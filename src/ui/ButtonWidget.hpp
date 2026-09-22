@@ -9,19 +9,11 @@
 // pairing, hit-testing, which mouse button counts) lives entirely in
 // src/input/InputHook.cpp/CUIManager::clickWidget().
 //
-// The onClick callback itself is CWidget's own generic mechanism (Phase
-// 10 follow-up, DESIGN.md) - setOnClick()/fireClick() aren't redeclared
-// here, this class just overrides hitTest()/isInteractive() to always be
-// a valid leaf click target (unconditionally, regardless of whether
-// onClick happens to be set) rather than only becoming one once a
-// handler's actually attached, which is the generic default every OTHER
-// widget type falls back to (see Widget.hpp's hitTest()) - Button keeps
-// its own "always a real button, structurally" contract from Phase 4.
-//
-// Deliberately Lua-agnostic like every other widget: LuaBridge.cpp owns
-// wrapping a Lua function reference into the std::function passed to
-// setOnClick(), including that reference's lifetime - this class has no
-// idea a Lua VM exists, matching every other widget in this tree.
+// onClick itself is CWidget's own generic field (setOnClick()/
+// fireClick() aren't redeclared here) - this class only overrides
+// hitTest()/isInteractive() to always be a valid leaf click target, even
+// with no onClick set, unlike the generic default every other widget type
+// falls back to.
 
 #include "Widget.hpp"
 
@@ -52,13 +44,10 @@ namespace HyprLUI {
         }
 
       protected:
-        // A button is a hit-testing leaf on purpose - we don't support
-        // (or need) buttons nested inside buttons, so there's no reason
-        // to search its children once its own bounds already match.
-        // Excludes disabled buttons too (Phase 10) - click-through, as if
-        // this widget isn't there for interaction purposes. Unconditional
-        // otherwise - matches even with no onClick set, unlike CWidget's
-        // generic default (see this file's own doc comment above).
+        // A hit-testing leaf on purpose - no buttons nested inside
+        // buttons. Excludes disabled buttons (click-through). Otherwise
+        // unconditional - matches even with no onClick set, unlike
+        // CWidget's generic default.
         CWidget* hitTest(const Vector2D& origin, const Vector2D& point, const Vector2D& scale = {1, 1}) override {
             if (!m_visible || m_disabled)
                 return nullptr;

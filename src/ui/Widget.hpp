@@ -3,10 +3,10 @@
 // Widget.hpp
 //
 // Base class for every element in the UI tree - both leaves (text, rects,
-// later buttons/inputs) and containers (Stack/Row/Column). A Window/Canvas
-// owns a single root Widget instead of a flat node list; layout runs as a
-// two-pass measure() (bottom-up, natural sizes) then arrange() (top-down,
-// final positions) walk before render().
+// buttons/inputs) and containers (Stack/Row/Column). A Window/Canvas owns a
+// single root Widget instead of a flat node list; layout runs as a two-pass
+// measure() (bottom-up, natural sizes) then arrange() (top-down, final
+// positions) walk before render().
 //
 // Extension point: to add a new leaf, subclass CWidget, implement render()
 // and optionally measureContent(). To add a new container, additionally
@@ -26,35 +26,17 @@
 
 namespace HyprLUI {
 
-    // Phase 13 (DESIGN.md): shared duration/bezier config for widget
-    // visibility fades (hyprlui.animation({leaf="in"|"out", ...}), see
-    // LuaBridge.cpp's luaAnimation()) - mirrors Hyprland's own
-    // windowsIn/windowsOut split, but is NOT hooked into Hyprland's real
-    // animation tree: verified (Config::AnimationTree.hpp) that
-    // CAnimationTreeController exposes no way to register a new leaf node
-    // from outside - `reset()` hardcodes the fixed tree once at startup,
-    // and hl.animation() itself errors on any name that isn't already one
-    // of those. So this is a small self-contained config store instead,
-    // reusing only what IS generically shared process-wide: the bezier-
-    // curve registry (Animation::mgr()->bezierExists()/getBezier(), a flat
-    // name->curve map, unrelated to the tree) and the animated-variable
-    // ticking machinery itself (confirmed by reading
-    // CHyprAnimationManager::tick()/handleUpdate(): a CGenericAnimatedVariable
-    // whose SAnimationContext has no window/workspace/layer set still gets
-    // ticked/interpolated correctly - it just skips Hyprland's own
-    // per-owner damage tracking, which HyprLUI doesn't want anyway, since
-    // it damages its own canvases itself, same as Watcher.cpp's notify()).
+    // Shared duration/bezier config for widget visibility fades
+    // (hyprlui.animation({leaf="in"|"out", ...})). NOT hooked into
+    // Hyprland's own animation tree - a plugin can't register a new leaf
+    // node there, so this is a small self-contained config store instead,
+    // reusing only what's generically shared process-wide: the bezier-curve
+    // registry and the animated-variable ticking machinery itself.
     //
-    // Each slot's SAnimationPropertyConfig is created ONCE (in the
-    // constructor) and mutated in place on every later configure() call,
-    // never replaced - widgets' CAnimatedVariables hold only a WEAK
-    // reference to it (CBaseAnimatedVariable::setConfig()), which would
-    // dangle if this were ever swapped for a new object instead of edited
-    // in place. Matches how Hyprland's own
-    // CAnimationConfigTree::setConfigForNode() behaves (mutates, never
-    // replaces) - confirmed by reading CBaseAnimatedVariable's own
-    // getPercent()/enabled()/getBezierName(), which all dereference
-    // m_pConfig->pValues->X fresh on every call, never caching.
+    // Each slot's SAnimationPropertyConfig is created once and mutated in
+    // place on every later configure() call, never replaced - widgets'
+    // CAnimatedVariables hold only a weak reference to it, which would
+    // dangle if this were ever swapped for a new object.
     class CWidgetAnimations {
       public:
         enum EKind {
@@ -68,23 +50,13 @@ namespace HyprLUI {
         }
 
         // hyprlui.animation({leaf="in"|"out", enabled, speed, bezier,
-        // style}) - `speed` is in DECISECONDS (tenths of a second),
-        // matching Hyprland's own hl.animation()'s unit exactly, so a
-        // user's existing mental model transfers directly. Disabled (the
-        // default, until configure() is ever called) means
-        // setVisible() stays exactly as instant as it always was - this
-        // is purely opt-in, no existing behavior changes unless a config
-        // author explicitly turns it on. `style` (Phase 16 follow-up,
-        // DESIGN.md) is Hyprland's own windowsIn/windowsOut style syntax
-        // ("slide", "slide left|right|top|bottom" - popin/gnome not
-        // implemented yet) stored straight into `internalStyle`, a field
-        // Hyprutils' SAnimationPropertyConfig already has (unrelated to
-        // the tree-structured CAnimationTreeController - see this class's
-        // own header comment) - see CWidget::styleOffset() for how it's
-        // actually turned into a position offset, applied uniformly to
-        // ANY widget (or a window's root, same thing), not just windows,
-        // matching this whole mechanism's existing "no distinction
-        // between a widget and its window" principle.
+        // style}) - `speed` is in deciseconds, matching Hyprland's own
+        // hl.animation(). Disabled by default, so this is purely opt-in.
+        // `style` is Hyprland's own windowsIn/windowsOut style syntax
+        // ("slide", "slide left|right|top|bottom", "popin"/"gnome") -
+        // see CWidget::styleOffset()/popinTransform() for how it's turned
+        // into an actual position/scale offset, applied uniformly to any
+        // widget, not just a window's root.
         void configure(EKind kind, bool enabled, float speedDeciseconds, const std::string& bezier, const std::string& style = "") {
             auto& cfg            = slot(kind);
             cfg->internalEnabled = enabled ? 1 : 0;
@@ -110,7 +82,7 @@ namespace HyprLUI {
                 (*cfg)->internalEnabled = 0;
                 (*cfg)->internalSpeed   = 3.f;
                 (*cfg)->internalBezier  = "default";
-                (*cfg)->pValues         = *cfg; // self-referencing root node, see class comment
+                (*cfg)->pValues         = *cfg; // self-referencing root node
             }
         }
 
@@ -124,14 +96,11 @@ namespace HyprLUI {
         SP<Hyprutils::Animation::SAnimationPropertyConfig> m_in, m_out;
     };
 
-    // Builds a standalone SAnimationPropertyConfig (self-referencing
-    // pValues, same shape as CWidgetAnimations' own slots above) - used
-    // for a per-widget animationIn/animationOut override (see CWidget::
-    // setAnimationInOverride()/setAnimationOutOverride() below), which
-    // unlike the global slots is built ONCE at construction time from a
-    // Lua table and never mutated in place afterward - there's no live-
-    // reconfigure API for one specific widget's own override the way
-    // hyprlui.animation() live-reconfigures the global one.
+    // Builds a standalone SAnimationPropertyConfig for a per-widget
+    // animationIn/animationOut override (see CWidget::
+    // setAnimationInOverride()/setAnimationOutOverride() below) - unlike
+    // CWidgetAnimations' global slots, this is built once at construction
+    // and never mutated in place afterward.
     inline SP<Hyprutils::Animation::SAnimationPropertyConfig> makeAnimationConfig(bool enabled, float speedDeciseconds, const std::string& bezier, const std::string& style = "") {
         auto cfg             = makeShared<Hyprutils::Animation::SAnimationPropertyConfig>();
         cfg->internalEnabled = enabled ? 1 : 0;
@@ -143,25 +112,15 @@ namespace HyprLUI {
     }
 
     // Shared implementation for CWidget::setVisible()/CCanvas::setVisible()
-    // - both are unrelated classes that need exactly this logic (a widget
-    // and a whole canvas fade the same way), so this is a free function
-    // operating on the caller's own `outVisible`/`anim` members by
-    // reference rather than duplicating it twice. `enabled`/`config` are
-    // already RESOLVED by the caller (CWidget layers its own optional
-    // per-widget fadeIn/fadeOut override on top of CWidgetAnimations'
-    // global one before calling this; CCanvas has no override concept and
-    // just passes the global one straight through) - this function itself
-    // doesn't know or care where they came from. Instant (the pre-
-    // Phase-13 behavior) if `enabled` is false; otherwise lazily creates
-    // `anim` the first time it's actually needed and animates it toward
-    // 1.0 (showing, `outVisible` flips true immediately so the caller
-    // keeps participating in layout/hit-testing/rendering from frame 1)
-    // or 0.0 (hiding, `outVisible` only flips false once `onHideFinished`
-    // actually runs). `onHideFinished`'s own goal re-check guards against
-    // a show() reversing the fade mid-flight: if a later call already
-    // reassigned the goal back to 1.0 by the time this fires, it's a
-    // no-op instead of incorrectly re-hiding something that just finished
-    // fading back in.
+    // - a free function operating on the caller's own outVisible/anim
+    // members by reference, since both need identical fade logic.
+    // `enabled`/`config` are already resolved by the caller. Instant if
+    // `enabled` is false; otherwise lazily creates `anim` and animates it
+    // toward 1.0 (showing - outVisible flips true immediately so the
+    // caller keeps participating in layout/hit-testing from frame 1) or
+    // 0.0 (hiding - outVisible only flips false once `onHideFinished`
+    // runs). `onHideFinished`'s own goal re-check guards against a show()
+    // reversing the fade mid-flight.
     inline void applyAnimatedVisibility(bool visible, bool enabled, const SP<Hyprutils::Animation::SAnimationPropertyConfig>& config, bool& outVisible, PHLANIMVAR<float>& anim,
                                         std::function<void()> onHideFinished) {
         if (!enabled) {
@@ -181,7 +140,7 @@ namespace HyprLUI {
         } else {
             *anim = 0.0f;
             auto* rawAnim =
-                anim.get(); // the goal re-check below needs to read it AFTER this call returns, once the callback actually fires later - `anim` itself (the caller's member) stays alive at least that long, so a raw pointer into it is safe
+                anim.get(); // safe: `anim` (the caller's member) outlives the callback below, which only reads this after anim() returns
             anim->setCallbackOnEnd([rawAnim, onHideFinished](WP<Hyprutils::Animation::CBaseAnimatedVariable>) {
                 if (rawAnim->goal() == 0.0f)
                     onHideFinished();
@@ -191,38 +150,23 @@ namespace HyprLUI {
 
     // Per-side box-model insets shared by `padding` (inset a container's
     // children from its own edges) and `margin` (a widget's own requested
-    // space around itself, read by a container's layout - see
-    // ContainerWidget.cpp). A plain aggregate on purpose, matching CHyprColor/
-    // Vector2D's own construction style elsewhere in this codebase.
+    // space around itself, read by a container's layout).
     struct SEdgeInsets {
         double top = 0, right = 0, bottom = 0, left = 0;
     };
 
-    // A widget's own debug-overlay config, tri-state per field (nullopt is
-    // meaningful and distinct from `false` in two different ways depending
-    // on which field it's on - see setDebug()'s doc comment below):
-    //
+    // A widget's own debug-overlay config. Tri-state per field:
     //   `enabled`  - nullopt = inherit the resolved value from the nearest
     //                ancestor that hasn't walled itself off (see
     //                setDebugCascade()); the tree root inherits `false`.
     //   `show*`    - nullopt = "auto": decide per-frame from this widget's
-    //                own size (and, for showZOpacity, whether it's even at
-    //                a non-default value) rather than from inheritance.
-    //                An explicit true/false here is a hard override that
-    //                also cascades to descendants exactly like `enabled`
-    //                does, until some deeper widget overrides it again.
-    //   `fontSize` - nullopt = inherit (or the tree-root default, 10) -
-    //                same inheritance as `enabled`/`show*`, just an int
-    //                instead of a bool. Point size for every debug label
-    //                this widget (and, via inheritance, its descendants)
-    //                draws - id/size/padding/margin/z-opacity text alike,
-    //                one shared size rather than a per-category knob.
+    //                own size. An explicit true/false is a hard override
+    //                that also cascades to descendants, like `enabled`.
+    //   `fontSize` - nullopt = inherit (or the tree-root default, 10).
     //
-    // This same struct doubles as both "what a widget itself asked for"
-    // (SLuaBridge's parsed spec) and "what's been resolved so far while
-    // walking down the tree" (renderDebug()'s `inherited` parameter) -
-    // merging one widget's own spec into an inherited one is the same
-    // "mine wins if set, else keep theirs" operation either way, see
+    // Doubles as both "what a widget itself asked for" and "what's been
+    // resolved so far while walking down the tree" - merging one into the
+    // other is "mine wins if set, else keep theirs" either way, see
     // Widget.cpp's resolveDebugSpec().
     struct SDebugSpec {
         std::optional<bool> enabled;
@@ -241,11 +185,9 @@ namespace HyprLUI {
 
         // Two-pass layout, run once per render over the whole tree before
         // any render() call - see measureContent()/arrangeChildren() below
-        // for the per-widget-type hooks. Both are non-virtual on purpose:
-        // every widget gets the "measure children first, then self" /
-        // "position children, then let them lay out their own children"
-        // ordering for free, and only needs to override the hook relevant
-        // to its own behavior.
+        // for the per-widget-type hooks. Both non-virtual: every widget
+        // gets the "measure children first, then self" / "position
+        // children, then let them arrange their own" ordering for free.
         void measure() {
             for (auto& child : m_children)
                 child->measure();
@@ -256,8 +198,7 @@ namespace HyprLUI {
                 m_size.y = *m_fixedH;
 
             // min/max clamp last, same as CSS - overrides even an explicit
-            // fixed size, since "never smaller/larger than this" is a
-            // stronger constraint than "this size" once both are given.
+            // fixed size.
             if (m_minW)
                 m_size.x = std::max(m_size.x, *m_minW);
             if (m_minH)
@@ -274,31 +215,15 @@ namespace HyprLUI {
                 child->arrange();
         }
 
-        // `origin` is the top-left corner of the parent in screen-space
-        // pixels; implementations should render at origin + m_position.
-        // `parentOpacity` is the already-composed (multiplied-together)
-        // opacity of every ancestor - see setOpacity()'s doc comment for
-        // why multiply, not override. `scale` (Phase 17/18, DESIGN.md) is
-        // a per-axis multiplier ACCUMULATED from every ancestor's own
-        // `popin`/`gnome` style, if any (see popinTransform() below) -
-        // generic per-widget, same as `parentOpacity`/`styleOffset()`,
-        // NOT a window-root-only special case (that was Phase 17's
-        // narrower first cut - see DESIGN.md for why it was widened).
-        // Default recurses into children (in z-index paint order, see
-        // paintOrder() below) at their laid-out positions (scaled and,
-        // if THIS widget itself has a popin/gnome style, further shrunk
-        // around its own center - see the childOrigin/childScale
-        // computation below), passing this widget's own composed opacity
-        // AND the accumulated scale down - right for containers; leaves
-        // override this instead and use the composed opacity to fade,
-        // and boxAt()'s own scale-aware box to draw, what they actually
-        // draw (which is why a leaf overriding this - CButtonWidget/
-        // CInputWidget - can just forward the origin/scale it itself
-        // received straight to `CWidget::render(...)` for its children:
-        // that call recomputes the exact same basePos/childOrigin/
-        // childScale below using `this` leaf's own m_position/
-        // styleOffset()/popinTransform(), identically to what its own
-        // boxAt() call used to draw itself).
+        // `origin` is the parent's already-accumulated absolute position;
+        // implementations render at origin + m_position. `parentOpacity`
+        // is every ancestor's already-composed opacity (see
+        // composedOpacity()). `scale` is a per-axis multiplier
+        // accumulated from every ancestor's own popin/gnome style, if
+        // any. Default recurses into children (in z-index paint order) at
+        // their laid-out positions; leaves override this to draw
+        // themselves instead, using composedOpacity()/boxAt() to fade and
+        // position what they draw.
         virtual void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) {
             if (!m_visible)
                 return;
@@ -328,36 +253,15 @@ namespace HyprLUI {
         }
 
         // Finds the topmost interactive widget whose bounds contain
-        // `point`, searching this widget's subtree. `origin` is this
-        // widget's PARENT's already-accumulated absolute position (same
-        // convention as render()'s origin parameter). Default: not
-        // interactive itself, just recurse into children in reverse paint
-        // order (see paintOrder() below) - whatever painted last/on top
-        // (highest z-index, ties broken by later insertion) is checked
-        // first so an overlapping later/higher sibling wins. Only
-        // ButtonWidget.hpp/InputWidget.hpp override this to actually match
-        // (return `this`) - everything else stays a pure pass-through
-        // search, so clicking a HUD's background/label doesn't swallow the
-        // click, only clicking an actual interactive widget does.
-        // Children get first refusal (unchanged - an interactive child
-        // wins over an ancestor that's ALSO clickable, e.g. a Checkbox
-        // inside a Row that also has its own onClick). Only once nothing
-        // below matched does this widget check itself: any widget with an
-        // onClick OR onScroll handler set becomes a real hit target this
-        // way, without needing to be a CButtonWidget - see setOnClick()/
-        // setOnScroll() below. Checking onScroll too (not just onClick)
-        // matters - hitTestWidget() is the SAME lookup hover-tracking and
-        // scroll dispatch both go through (InputHook.cpp), so a widget
-        // with only onScroll set (no onClick - e.g. a scroll-driven
-        // custom control) still needs to actually match here, or scroll
-        // would never reach it despite the field being "generically"
-        // accepted. CButtonWidget/CInputWidget/CCheckboxWidget still
-        // override this entirely (unconditional leaf match, regardless of
-        // whether either callback happens to be set) for their own
-        // specific reasons - Button's "always a valid click target
-        // structurally" contract, Input's click-to-focus, Checkbox's
-        // toggle - this default is only what a plain Box/Text/Image/Row/
-        // Column/Stack falls back to.
+        // `point`, searching this widget's subtree (`origin` = parent's
+        // already-accumulated absolute position). Default: not interactive
+        // itself, recurses into children in reverse paint order (highest
+        // z-index/latest-inserted first) so an overlapping later/higher
+        // sibling wins; only once nothing below matches does this widget
+        // check itself - true if it has an onClick or onScroll handler
+        // set (see setOnClick()/setOnScroll()). CButtonWidget/
+        // CInputWidget/CCheckboxWidget override this entirely for their
+        // own always-a-target/click-to-focus/toggle semantics.
         virtual CWidget* hitTest(const Vector2D& origin, const Vector2D& point, const Vector2D& scale = {1, 1}) {
             if (!m_visible)
                 return nullptr;
@@ -377,40 +281,26 @@ namespace HyprLUI {
             return nullptr;
         }
 
-        // Whether this widget itself is ever a real hitTest() match (i.e.
-        // overrides hitTest() to return `this`) - purely descriptive, used
-        // only by the debug overlay's hit-target highlight (Widget.cpp) to
-        // know which widgets to draw it for. Default reflects whether THIS
-        // instance actually has an onClick or onScroll handler set
-        // (matching hitTest()'s own default above exactly) -
-        // CButtonWidget/CInputWidget/CCheckboxWidget override to
-        // unconditional `true` instead, same reasoning as their own
-        // hitTest() overrides. Deliberately separate from actually calling
-        // hitTest() here, which would need a point to test against and
-        // could recurse - this just answers "is this widget the KIND of
-        // thing that can ever match at all."
+        // Whether this widget is ever a real hitTest() match - purely
+        // descriptive, used by the debug overlay's hit-target highlight.
+        // Default mirrors hitTest()'s own default (onClick or onScroll
+        // set); CButtonWidget/CInputWidget/CCheckboxWidget override to
+        // unconditional `true`.
         virtual bool isInteractive() const {
             return static_cast<bool>(m_onClick) || static_cast<bool>(m_onScroll);
         }
 
-        // A plain no-argument click callback, available on ANY widget
-        // (not just Button) - see hitTest()'s default above for what
-        // actually makes this functional, not just stored. Same
-        // press-must-land-on-the-same-widget-as-release semantics as
-        // Button always had (InputHook.cpp), now via CUIManager::
-        // clickWidget()'s generic fireClick() fallback rather than a
-        // Button-specific dynamic_cast. Checkbox intentionally does NOT
-        // use this - its click() toggles state and fires onChange(bool)
-        // instead, a different shape; setting onClick on a Checkbox is
-        // harmless but inert (CUIManager::clickWidget() resolves the
-        // CCheckboxWidget branch first and never reaches this fallback).
+        // A plain no-argument click callback, available on any widget, not
+        // just Button - see hitTest()'s default for what makes this
+        // actually functional. Checkbox does not use this - its click()
+        // toggles state and fires onChange(bool) instead.
         void setOnClick(std::function<void()> fn) {
             m_onClick = std::move(fn);
         }
 
-        // Invokes the onClick handler, if any, and reports whether one
-        // was actually set - called by CUIManager::clickWidget() once a
-        // press and its matching release both land on this same widget.
+        // Invokes the onClick handler, if any, and reports whether one was
+        // set - called once a press and its matching release both land on
+        // this same widget.
         bool fireClick() {
             if (!m_onClick)
                 return false;
@@ -418,22 +308,13 @@ namespace HyprLUI {
             return true;
         }
 
-        // Interactive state (Phase 10, DESIGN.md) - shared across every
-        // interactive widget type (CButtonWidget/CInputWidget/
-        // CCheckboxWidget) instead of each reinventing its own hover/
-        // disabled bookkeeping, same "shared base field, only some
-        // subclasses actually interpret it" pattern Phase 7's padding/
-        // margin/opacity/etc. already established. Only meaningful for a
-        // widget whose isInteractive() is true - a decorative Box setting
-        // these does nothing (its hitTest() never matches, so it can
-        // never become hovered/disabled-and-skipped in the first place).
+        // Interactive state, shared across every interactive widget type
+        // instead of each reinventing its own hover/disabled bookkeeping.
+        // Only meaningful for a widget whose isInteractive() is true.
         //
-        // `disabled`: excludes this widget from hitTest() entirely (see
-        // CButtonWidget/CInputWidget/CCheckboxWidget's own overrides) -
-        // click-through/unfocusable, as if it isn't there for interaction
-        // purposes, while still rendering. A disabled widget can therefore
-        // never become the hovered one either - hover and disabled are
-        // mutually exclusive by construction, not just by convention.
+        // `disabled`: excludes this widget from hitTest() entirely -
+        // click-through/unfocusable, while still rendering. A disabled
+        // widget can never become hovered either.
         void setDisabled(bool disabled) {
             m_disabled = disabled;
         }
@@ -442,14 +323,8 @@ namespace HyprLUI {
         }
 
         // `hovered`: current hover state, set by CUIManager (via
-        // setHovered()) as the pointer moves - never set directly by a
-        // widget itself. setHovered() both updates the stored flag AND
-        // fires onHoverStart/onHoverEnd on the transition, unlike Input's
-        // focus()/blur() (Phase 6) which don't store any state on the
-        // widget at all - hoverColor's automatic, no-Lua-round-trip
-        // application (see effectiveFillColor() below) is what forces
-        // this one to actually remember its own state, since render()
-        // needs to know it directly.
+        // setHovered()) as the pointer moves. Fires onHoverStart/
+        // onHoverEnd on the transition.
         void setHovered(bool hovered) {
             if (hovered == m_hovered)
                 return;
@@ -476,13 +351,10 @@ namespace HyprLUI {
             m_onHoverEnd = std::move(fn);
         }
 
-        // Picks which color a leaf should actually fill with this frame -
-        // `disabledColor` if disabled and set, else `hoverColor` if
-        // hovered and set, else `base` (the widget's own normal color,
-        // e.g. CButtonWidget's m_color) unchanged. No precedence conflict
-        // between the two overrides is possible (see `disabled`'s doc
-        // comment above - a disabled widget is never the hovered one), so
-        // this is a plain two-step fallback, not a priority system.
+        // Picks which color a leaf should fill with this frame:
+        // disabledColor if disabled and set, else hoverColor if hovered
+        // and set, else `base`. No precedence conflict is possible - a
+        // disabled widget is never the hovered one.
         const CHyprColor& effectiveFillColor(const CHyprColor& base) const {
             if (m_disabled && m_disabledColor)
                 return *m_disabledColor;
@@ -491,21 +363,17 @@ namespace HyprLUI {
             return base;
         }
 
-        // Scroll (Phase 10): stays completely inert unless a handler is
-        // explicitly set - matches the "swallow only what's opted into"
-        // philosophy already established for Phase 6's keybind-priority
-        // default. `vertical` is true for the common mouse-wheel axis,
-        // false for horizontal scroll; `delta` is the raw
-        // IPointer::SAxisEvent value forwarded as-is (see InputHook.cpp),
-        // no attempt to normalize/invert it into a "lines scrolled" unit.
+        // Stays completely inert unless a handler is explicitly set.
+        // `vertical` is true for the common mouse-wheel axis, false for
+        // horizontal scroll; `delta` is the raw axis-event value
+        // forwarded as-is, not normalized.
         void setOnScroll(std::function<void(double delta, bool vertical)> fn) {
             m_onScroll = std::move(fn);
         }
 
         // Invokes the onScroll handler, if any, and reports whether one
-        // was actually set - InputHook.cpp only cancels the underlying
-        // mouse.axis event when this returns true, so scroll passes
-        // through untouched to whatever's behind an unhandled widget.
+        // was set - InputHook.cpp only cancels the underlying scroll
+        // event when this returns true.
         bool fireScroll(double delta, bool vertical) {
             if (!m_onScroll)
                 return false;
@@ -534,20 +402,10 @@ namespace HyprLUI {
 
         // Per-widget override of the global hyprlui.animation({leaf=
         // "in"|"out", ...}) config, set once at construction from this
-        // widget's own `animationIn`/`animationOut` table field (see
-        // LuaBridge.cpp's buildWidget()) - nullptr (the default) means
-        // "use the global config for this leaf, whatever it currently
-        // is." A non-null override completely REPLACES the global one for
-        // this widget (including its own enabled/disabled state - e.g. a
-        // widget can force `animationOut = { enabled = false }` to opt
-        // itself OUT of a globally-enabled animation), it does not merge
-        // with it. Only affects setVisible()/animateOutThenRemove() below,
-        // not the global config itself or any other widget. Deliberately
-        // NOT named "fade" anywhere in this API - opacity is the only
-        // thing actually animated today, but the leaf/override mechanism
-        // itself is generic (any future animatable property would reuse
-        // the same "in"/"out" config shape), so nothing here should imply
-        // it's opacity-only.
+        // widget's own animationIn/animationOut table field. nullptr (the
+        // default) means "use the global config for this leaf." A non-null
+        // override completely replaces the global one for this widget
+        // (including enabled/disabled), it does not merge with it.
         void setAnimationInOverride(SP<Hyprutils::Animation::SAnimationPropertyConfig> config) {
             m_animationInOverride = std::move(config);
         }
@@ -555,24 +413,14 @@ namespace HyprLUI {
             m_animationOutOverride = std::move(config);
         }
 
-        // Instant by default, exactly as before Phase 13 - only animates
-        // if the relevant leaf (`IN` when becoming visible, `OUT` when
-        // becoming hidden) resolves enabled - this widget's own override
-        // (see setAnimationInOverride()/setAnimationOutOverride() above)
-        // if it has one, else the global hyprlui.animation() config - so
-        // this is purely opt-in. Used identically regardless of WHY
-        // visibility is changing - an explicit hyprlui.set_widget_visible()
-        // call, or this widget being a window's root widget and the whole
-        // window opening/closing (see CCanvas::setVisible(), which just
-        // delegates to its root's own setVisible()) - there is no separate
-        // "creation" or "toggle" animation concept, just becoming visible
-        // or becoming hidden. When animating a hide, `m_visible` itself
-        // doesn't flip to false until the animation actually finishes (via
-        // the end callback below) - the widget keeps rendering/laying out
-        // at its fading-down opacity until then. When animating a show,
-        // `m_visible` flips true immediately (same as the instant path)
-        // so it participates in layout/hit-testing from frame 1, and only
-        // its opacity ramps up.
+        // Instant by default - only animates if the relevant leaf (IN when
+        // becoming visible, OUT when becoming hidden) resolves enabled
+        // (this widget's own override if it has one, else the global
+        // config) - purely opt-in. Used identically regardless of why
+        // visibility is changing (an explicit call, or this being a
+        // window's root and the whole window opening/closing). Hiding:
+        // m_visible doesn't flip false until the animation finishes.
+        // Showing: m_visible flips true immediately, only opacity ramps.
         void setVisible(bool visible) {
             const auto& widgetCfg = visible ? m_animationInOverride : m_animationOutOverride;
             if (widgetCfg) {
@@ -587,35 +435,22 @@ namespace HyprLUI {
             return m_visible;
         }
 
-        // Forces this widget fully hidden with NO animation and no
-        // end-callback - used ONLY by hyprlui.window()'s creation path
-        // (LuaBridge.cpp) to seed a brand-new root widget into a "just
-        // built, about to animate in" state before immediately calling
-        // setVisible(true) on it, so that call has something to actually
-        // animate FROM. A plain setVisible(false) there would be wrong
-        // whenever this widget's "out" also happens to be enabled (it
-        // would itself animate 1->0 instead of snapping instantly,
-        // breaking the very assumption the following setVisible(true)
-        // relies on). Not for general use - an ordinary hide should always
-        // go through setVisible(false) instead, so its own end-callback
-        // semantics apply.
+        // Forces this widget fully hidden with no animation/end-callback -
+        // used only by hyprlui.window()'s creation path to seed a
+        // brand-new root into a "just built, about to animate in" state
+        // before calling setVisible(true), so that call has something to
+        // animate from. Not for general use - an ordinary hide should
+        // always go through setVisible(false) instead.
         void primeHidden() {
             m_visible = false;
             m_visibilityAnim.reset();
         }
 
-        // Like setVisible(false), but the caller intends to actually
-        // ERASE this widget afterward (hyprlui.remove_widget(), or a
-        // whole window closing via CUIManager::removeCanvas() delegating
-        // to its root - not just hide it) - `onDone` fires once that's
-        // safe: immediately if "out" isn't enabled (this widget's own
-        // override if it has one, else the global config), or once the
-        // animation finishes otherwise. This widget doesn't know its own
-        // parent, so it can't call removeChild() on itself - the caller
-        // (LuaBridge.cpp) does the actual erase from `onDone`. No
-        // reversal-guard needed here (unlike applyAnimatedVisibility's
-        // hide path) - nothing ever calls setVisible(true) on a widget
-        // that's about to be removed.
+        // Like setVisible(false), but the caller intends to actually erase
+        // this widget afterward - `onDone` fires once that's safe
+        // (immediately if OUT isn't enabled, else once the animation
+        // finishes). This widget doesn't know its own parent, so the
+        // caller does the actual erase from `onDone`.
         void animateOutThenRemove(std::function<void()> onDone) {
             const auto& config  = m_animationOutOverride ? m_animationOutOverride : CWidgetAnimations::get().config(CWidgetAnimations::OUT);
             const bool  enabled = m_animationOutOverride ? m_animationOutOverride->internalEnabled != 0 : CWidgetAnimations::get().enabled(CWidgetAnimations::OUT);
@@ -635,14 +470,8 @@ namespace HyprLUI {
         }
 
         // Whether this widget's own visibility fade, or any descendant's,
-        // is actively interpolating right now - used by CCanvas::render()
-        // to know whether to keep damaging every frame while a fade is in
-        // flight. A fade changes rendered opacity every frame for its
-        // whole duration, unlike every other mutation in this codebase
-        // (which changes state once and is done) - see CCanvas::damage()'s
-        // doc comment for why even a single one-shot mutation needs
-        // several frames of damage, let alone a multi-second continuous
-        // one.
+        // is actively interpolating - used by CCanvas::render() to know
+        // whether to keep damaging every frame while a fade is in flight.
         bool isAnimating() const {
             if (m_visibilityAnim && m_visibilityAnim->isBeingAnimated())
                 return true;
@@ -667,44 +496,28 @@ namespace HyprLUI {
         }
 
         // Pins this widget's laid-out size instead of letting measure()
-        // derive it from content/children ("size-to-content" is the
-        // default - passing a value here overrides one or both axes).
+        // derive it from content/children (size-to-content is the
+        // default).
         void setFixedSize(std::optional<double> w, std::optional<double> h) {
             m_fixedW = w;
             m_fixedH = h;
         }
 
-        // Cross-axis stretch (a Phase 15 prerequisite for animated window
-        // sizing, DESIGN.md) - "this widget should match its parent's
-        // available size instead of sizing itself from its own content."
-        // Interpreted differently per parent type, all via the SAME
-        // public setSize() above, applied during arrange() (AFTER the
-        // whole tree's measure() pass has already finished, so this never
-        // feeds back into any size CALCULATION, only overrides the
-        // already-settled result for layout purposes) - deliberately a
-        // per-frame, non-pinning override (unlike setFixedSize() above,
-        // which persists and is re-applied every future measure() too):
-        //   - CFlexWidget (Row/Column): stretches to the row/column's
-        //     full CROSS-axis space (like CSS align-self: stretch) - the
-        //     MAIN axis is untouched, still sized from this widget's own
-        //     content (flex-grow along the main axis is explicitly out of
-        //     scope, see DESIGN.md).
-        //   - CStackWidget: matches the stack's own full measured size at
-        //     position (0, 0) - ignores the stack's padding, consistent
-        //     with CStackWidget's own already-established "manual
-        //     positioning, no padding interpretation" design.
-        //   - A window's root widget: matches its CCanvas's own size, but
-        //     only on axes where the canvas actually HAS a determinate
-        //     size (an explicit w/h from hyprlui.window() or
-        //     set_canvas_size()) - an auto-sized (size-to-content) axis
-        //     has nothing determinate to fill, so is left untouched, same
-        //     inherent limitation CSS stretch has against an "auto"
-        //     parent.
-        // A widget with no non-fill sibling/ancestor establishing a real
-        // size on some axis (e.g. a Stack whose ONLY child is also
-        // `fill`, or a root widget in a fully auto-sized window) has
-        // nothing to stretch TO on that axis and stays at its own natural
-        // size there - expected, not a bug, same as CSS.
+        // Cross-axis stretch - "match my parent's available size instead
+        // of sizing from my own content" (CSS align-self: stretch, not
+        // flex-grow). Applied during arrange(), after the whole tree's
+        // measure() pass, so it never feeds back into sizing, only
+        // overrides the laid-out result:
+        //   - Row/Column: stretches to the full cross-axis space; the
+        //     main axis stays sized from this widget's own content.
+        //   - Stack: matches the stack's own full measured size at (0,0),
+        //     ignoring the stack's padding.
+        //   - A window's root: matches its canvas's size, but only on axes
+        //     where the canvas has a determinate size (explicit w/h).
+        // A widget with nothing establishing a real size on some axis
+        // (e.g. a Stack whose only child is also `fill`) stays at its own
+        // natural size there - expected, matches CSS stretch against an
+        // "auto" parent.
         void setFill(bool fill) {
             m_fill = fill;
         }
@@ -712,12 +525,10 @@ namespace HyprLUI {
             return m_fill;
         }
 
-        // Clamps measure()'s result to [min, max] on each axis independently
-        // (either bound may be omitted). Applied AFTER setFixedSize()'s
-        // override, same precedence CSS gives min/max-width over an
-        // explicit width. A leaf whose visual content is itself a texture
-        // (CTextNode) draws that texture at its own natural size rather
-        // than stretching it to fill a min-widened box - see TextNode.cpp.
+        // Clamps measure()'s result to [min, max] on each axis
+        // independently (either bound may be omitted), applied after
+        // setFixedSize()'s override - same precedence CSS gives min/max-
+        // width over an explicit width.
         void setMinSize(std::optional<double> w, std::optional<double> h) {
             m_minW = w;
             m_minH = h;
@@ -730,7 +541,7 @@ namespace HyprLUI {
         // Inset a container's own children from its edges - only
         // CFlexWidget and CInputWidget's auto-owned label currently
         // interpret this (CStackWidget's manual positioning leaves it
-        // unused by design - see DESIGN.md Phase 7).
+        // unused by design).
         void setPadding(const SEdgeInsets& padding) {
             m_padding = padding;
         }
@@ -739,9 +550,8 @@ namespace HyprLUI {
         }
 
         // A widget's own requested space around itself, read by whichever
-        // container is laying it out - only CFlexWidget currently reads a
-        // child's margin (see ContainerWidget.cpp); CStackWidget's manual
-        // positioning leaves it unused by design, same as padding above.
+        // container lays it out - only CFlexWidget currently reads a
+        // child's margin; CStackWidget leaves it unused, same as padding.
         void setMargin(const SEdgeInsets& margin) {
             m_margin = margin;
         }
@@ -750,10 +560,8 @@ namespace HyprLUI {
         }
 
         // Own opacity in [0, 1], multiplied with every ancestor's own
-        // opacity to get what actually reaches render() (see its doc
-        // comment) - CSS/Qt/every-toolkit's convention, so a semi-
-        // transparent container naturally fades its children too instead
-        // of each widget's opacity being independent/absolute.
+        // opacity (CSS/Qt convention) so a semi-transparent container
+        // naturally fades its children too.
         void setOpacity(double opacity) {
             m_opacity = opacity;
         }
@@ -761,15 +569,10 @@ namespace HyprLUI {
             return m_opacity;
         }
 
-        // Combines `parentOpacity` with this widget's own `m_opacity` AND
-        // (Phase 13) any in-flight visibility-fade progress from
-        // setVisible() - every render() override (this default container
-        // implementation and each leaf widget's own) multiplies through
-        // this rather than inlining `parentOpacity * m_opacity` directly,
-        // so the fade applies uniformly without each leaf needing its own
-        // awareness of m_visibilityAnim. A widget that's never been
-        // animated (m_visibilityAnim still null) computes identically to
-        // before Phase 13 - zero behavior change unless actually used.
+        // Combines `parentOpacity` with this widget's own opacity and any
+        // in-flight visibility-fade progress - every render() override
+        // multiplies through this rather than inlining the composition
+        // directly.
         float composedOpacity(float parentOpacity) const {
             float o = parentOpacity * static_cast<float>(m_opacity);
             if (m_visibilityAnim)
@@ -777,15 +580,9 @@ namespace HyprLUI {
             return o;
         }
 
-        // Paint-order override among this widget's OWN siblings (i.e.
-        // within its parent's child list) - higher paints later/on top.
-        // Ties (including the default, everyone at 0) keep insertion
-        // order, so this is a pure additive extension of "later child
-        // wins" with no behavior change when unused. Deliberately just a
-        // sibling-local reorder, not a full CSS stacking-context system -
-        // a low-z-index child of a high-z-index widget still paints
-        // "inside" its parent's turn, it can't jump above a different
-        // parent entirely.
+        // Paint-order override among this widget's own siblings - higher
+        // paints later/on top. Ties keep insertion order. A sibling-local
+        // reorder only, not a full CSS stacking-context system.
         void setZIndex(int zIndex) {
             m_zIndex = zIndex;
         }
@@ -793,39 +590,19 @@ namespace HyprLUI {
             return m_zIndex;
         }
 
-        // Phase 16 follow-up (DESIGN.md) - `style`'s position offset, if
-        // this widget's currently-active visibility animation (its own
-        // override if it has one, else the global config - see
-        // setVisible()) has one set (CWidgetAnimations::configure()'s
-        // `style` param / a widget's own animationIn/animationOut
-        // `style` field). Reuses m_visibilityAnim directly rather than a
-        // second, separately-configured animated value - opacity and
-        // slide progress are literally the same 0..1 goal, matching how
-        // Hyprland's own windowsIn/windowsOut couples alpha and position
-        // under ONE animation (WindowAnimationController.cpp's
-        // animateIn()/animateOut() always fades alpha 0<->1 regardless of
-        // style; this mirrors that exactly - `style` on a widget with
-        // `enabled = false` does nothing, same as opacity doesn't).
-        // `getStyle()` reads back internalStyle straight off whatever
-        // config m_visibilityAnim is CURRENTLY attached to (see
-        // Hyprutils::Animation::CBaseAnimatedVariable::getStyle()) - no
-        // separate tracking needed here for which override/global config
-        // is "active".
+        // `style`'s position offset, if this widget's currently-active
+        // visibility animation has one set. Reuses m_visibilityAnim
+        // directly - opacity and slide progress are the same 0..1 goal,
+        // matching how Hyprland's own windowsIn/windowsOut couples them.
         //
-        // Syntax matches Hyprland's own windowsIn/windowsOut style string
-        // (WindowAnimationController.cpp) - "slide" or "slide
-        // left|right|top|bottom" - MINUS its "no direction given ->
-        // auto-pick the nearest monitor edge" behavior, which needs
-        // monitor geometry a plain widget doesn't have (only a window's
-        // own canvas does) - "left" is the fixed default here instead,
-        // for both widgets and window roots alike, for consistency. Only
-        // "slide" is handled HERE - "popin"/"gnome" (Phase 17/18,
-        // DESIGN.md) are valid `style` strings too (see LuaBridge.cpp's
-        // optStyleField()) but produce a SCALE, not a translation, so
-        // they're computed by popinTransform() below instead - a non-
-        // "slide" style simply returns {0,0} here, same as no style at
-        // all. The distance slid is always this widget's own current
-        // size along that axis.
+        // Syntax matches Hyprland's own style string - "slide" or "slide
+        // left|right|top|bottom" - minus its "no direction -> auto-pick
+        // nearest monitor edge" behavior (needs monitor geometry a plain
+        // widget doesn't have; "left" is the fixed default here instead).
+        // Only "slide" is handled here - "popin"/"gnome" produce a scale,
+        // not a translation, so popinTransform() below handles those; a
+        // non-slide style just returns {0,0}. The distance slid is always
+        // this widget's own current size along that axis.
         Vector2D styleOffset() const {
             if (!m_visibilityAnim)
                 return {0, 0};
@@ -850,42 +627,29 @@ namespace HyprLUI {
             return magnitude * (1.0 - m_visibilityAnim->value());
         }
 
-        // This widget's OWN popin/gnome contribution - `scale` (1 = full
+        // This widget's own popin/gnome contribution - `scale` (1 = full
         // size, per axis) and `offset` (keeps the shrink centered on this
-        // widget's own box). {1,1}/{0,0} (no-op) for "slide" or no style
-        // at all - see styleOffset() above for those instead.
+        // widget's own box). {1,1}/{0,0} for "slide" or no style at all.
         struct SPopinTransform {
             Vector2D scale{1, 1};
             Vector2D offset{0, 0};
         };
 
-        // Phase 17/18 (DESIGN.md) - generalized from Phase 17's original
-        // window-root-only version (which computed these exact formulas,
-        // just once, inside CCanvas's own render() for m_root only - see
-        // git history / DESIGN.md's Phase 18 entry for why it was
-        // widened): ANY widget with `style = "popin"`/`"popin N%"`/
-        // `"gnome"`/`"gnomed"` set (its own animationIn/animationOut
-        // override, or the global hyprlui.animation() config) now shrinks
-        // itself AND its whole subtree around its own center, exactly the
-        // same "no distinction between a widget and its window" principle
-        // `slide` (styleOffset() above) and the opacity fade both already
-        // follow - a window's root doing this IS the whole window
-        // shrinking, same as before, just no longer a special case CCanvas
-        // has to know about (see render()/hitTest() below for how a
-        // widget's own transform composes - multiplicatively - with
-        // whatever its ancestors already contributed, rather than
-        // replacing it: a widget nested inside an already-popin-ing
-        // ancestor shrinks further, relative to its own center within
-        // that already-shrunk space).
+        // Any widget with style = "popin"/"popin N%"/"gnome"/"gnomed" set
+        // shrinks itself and its whole subtree around its own center -
+        // applies to any widget, not just a window's root (a window's
+        // root doing this IS the whole window shrinking). Composes
+        // multiplicatively with whatever its ancestors already
+        // contributed (see render()/hitTest()) - a widget nested inside
+        // an already-popin-ing ancestor shrinks further, relative to its
+        // own center within that already-shrunk space.
         //
-        // Math mirrors Hyprland's own WindowAnimationController.cpp
-        // exactly (applyPopin()/applyGnomed()), re-derived directly in
-        // terms of progress rather than its own from/to interpolation
-        // shape: `popin`'s scale = minPerc + (1 - minPerc) * progress
-        // (uniform on both axes, minPerc from an optional trailing "N%",
-        // default 0); `gnome`'s scale = {1, progress} (X untouched, Y
-        // squashes to a horizontal line). Either way, offset = size/2 *
-        // (1 - scale) componentwise, keeping the shrink centered.
+        // Math mirrors Hyprland's own WindowAnimationController.cpp:
+        // popin's scale = minPerc + (1 - minPerc) * progress (uniform on
+        // both axes, minPerc from an optional trailing "N%", default 0);
+        // gnome's scale = {1, progress} (Y squashes to a horizontal line,
+        // X untouched). Either way, offset = size/2 * (1 - scale)
+        // componentwise, keeping the shrink centered.
         SPopinTransform popinTransform() const {
             if (!m_visibilityAnim)
                 return {};
@@ -904,27 +668,22 @@ namespace HyprLUI {
                 const double s = minPerc + (1.0 - minPerc) * m_visibilityAnim->value();
                 scale          = {s, s};
             } else {
-                return {}; // "slide" or no style - {1,1}/{0,0}, not this method's concern
+                return {}; // "slide" or no style
             }
             return {scale, m_size * 0.5 * (Vector2D{1.0, 1.0} - scale)};
         }
 
-        // `scale` (Phase 17/18) - see render()'s own doc comment for what
-        // this is: the ACCUMULATED scale from every ancestor's own
-        // popinTransform(), NOT including this widget's own (that's
-        // applied here, on top, via popinTransform() below - a widget's
-        // own shrink affects its own drawn box exactly like it affects
-        // its children's).
+        // `scale` here is the accumulated scale from every ancestor's own
+        // popinTransform() (NOT including this widget's own, applied on
+        // top via popinTransform() below).
         CBox boxAt(const Vector2D& origin, const Vector2D& scale = {1, 1}) const {
             const Vector2D basePos = origin + (m_position + styleOffset()) * scale;
             const auto     local   = popinTransform();
             return {basePos + local.offset * scale, m_size * scale * local.scale};
         }
 
-        // This widget's own debug-overlay request (see SDebugSpec's doc
-        // comment for what each field means and how it merges with
-        // ancestors). Unset fields (nullopt) don't override anything -
-        // they just fall through to whatever's inherited/auto.
+        // This widget's own debug-overlay request - see SDebugSpec for
+        // what each field means and how it merges with ancestors.
         void setDebug(const SDebugSpec& debug) {
             m_debugSpec = debug;
         }
@@ -932,14 +691,10 @@ namespace HyprLUI {
             return m_debugSpec;
         }
 
-        // Whether this widget's RESOLVED debug config (its own SDebugSpec
-        // merged with whatever it inherited - see renderDebug()) becomes
-        // the seed its children inherit from (the default, `true`), or
-        // whether they instead start completely fresh (`false` - neither
-        // this widget's own settings nor anything further up reaches
-        // below it) - an escape hatch for "debug this one widget without
-        // lighting up its entire subtree," or the reverse, "debug is on
-        // above me, but I want this specific branch left alone."
+        // Whether this widget's resolved debug config becomes the seed its
+        // children inherit from (the default, `true`), or they instead
+        // start completely fresh (`false`) - lets a subtree be debugged in
+        // isolation, or left alone while debug is on above it.
         void setDebugCascade(bool cascade) {
             m_debugCascade = cascade;
         }
@@ -948,96 +703,60 @@ namespace HyprLUI {
         }
 
         // Debug-overlay tree walk - entirely separate from render()/
-        // hitTest() (draws box-model outlines/labels for whichever
-        // widgets resolve `enabled`, see SDebugSpec), called once per
-        // frame from CCanvas::render() AFTER the real render() pass so it
-        // always paints on top regardless of any widget's own z-index/
-        // opacity (it's diagnostic, not real content - see Widget.cpp).
-        // `inherited` is the resolved SDebugSpec accumulated from every
-        // ancestor so far; the initial call from CCanvas passes a fresh
-        // SDebugSpec{} (i.e. "nothing enabled, everything auto" at the
-        // root). Non-virtual and implemented once for every widget type,
-        // same reasoning as measure()/arrange() - the box-model
-        // information it draws (position/size/padding/margin/id/zIndex/
-        // opacity) is entirely made of base CWidget fields, no per-
-        // subclass knowledge needed.
+        // hitTest(), called once per frame from CCanvas::render() after
+        // the real render() pass so it always paints on top. `inherited`
+        // is the resolved SDebugSpec accumulated from every ancestor so
+        // far (the root call passes a fresh SDebugSpec{}). Non-virtual,
+        // implemented once for every widget type - the box-model info it
+        // draws is entirely made of base CWidget fields.
         //
-        // Returns the union of every pixel actually drawn anywhere in
-        // this subtree's overlay (nullopt if nothing anywhere has debug
-        // enabled) - several of drawDebugOverlay()'s own labels (id,
-        // margin, size, z/opacity) are DELIBERATELY drawn just outside a
-        // widget's own box, so CCanvas needs this back to know how far
-        // beyond its normal content box it has to damage - see
-        // CCanvas::fullDamageBox()'s doc comment for the ghosting bug
-        // this fixes (content box alone under-damages this overlay,
-        // which self-heals for ordinary discrete mutations, since the
-        // overflowing pixels just don't change between them, but visibly
-        // ghosts the instant something DOES keep changing there every
-        // frame - a Phase 13 fade being the most common case).
+        // Returns the union of every pixel actually drawn (nullopt if
+        // nothing has debug enabled) - some labels are deliberately drawn
+        // just outside a widget's own box, so CCanvas needs this to know
+        // how far beyond the normal content box to damage.
         std::optional<CBox> renderDebug(const Vector2D& origin, const SDebugSpec& inherited);
 
       public:
-        // Snapshots this widget's CURRENT m_size as its own natural/
-        // intrinsic content size, read back by the default measureContent()
-        // below every frame - called once by buildWidget() (LuaBridge.cpp)
-        // right after a widget is fully constructed (including any type-
-        // specific size assignment, e.g. CRectNode's w/h constructor args),
-        // before it could ever participate in a frame's measure()/arrange()
-        // pass. Also called again by CImageWidget::reload() whenever
-        // setImage() genuinely changes the decoded texture's size - the one
-        // leaf type whose natural size can legitimately change AFTER
-        // construction without going through setFixedSize(). A container or
-        // CTextNode's own measureContent() override never reads
-        // m_naturalSize at all (they derive their size some other way every
-        // frame), so calling this on them is harmless.
+        // Snapshots this widget's current m_size as its own natural/
+        // intrinsic content size, read back by the default
+        // measureContent() below. Called once by buildWidget()
+        // (LuaBridge.cpp) right after a widget is fully constructed, and
+        // again by CImageWidget::reload() whenever setImage() changes the
+        // decoded texture's size - the one leaf type whose natural size
+        // can legitimately change after construction.
         void primeNaturalSize() {
             m_naturalSize = m_size;
         }
 
       protected:
-        // Sets m_size from this widget's own content/children every frame.
-        // Default: reset to this widget's own natural/intrinsic size (see
-        // primeNaturalSize() above) - correct for a LEAF (CRectNode/
-        // CImageWidget/CButtonWidget/etc; nothing about its own size
-        // depends on anything that changes frame to frame, the same way a
-        // container's already-existing override derives its size fresh
-        // from children every frame). Containers (CStackWidget/CFlexWidget)
-        // and CTextNode override this entirely instead, deriving their size
-        // some other way every frame - m_naturalSize is irrelevant to them.
+        // Sets m_size from this widget's own content/children every
+        // frame. Default: reset to this widget's own natural/intrinsic
+        // size - correct for a leaf, whose size doesn't otherwise depend
+        // on anything that changes frame to frame. Containers and
+        // CTextNode override this entirely instead.
         //
-        // This is what makes a LEAF self-correcting exactly like a
-        // container already was: without it, a `fill` child's stretch
-        // (setFill(), applied via setSize() during arrange()) would leave
-        // m_size permanently at whatever it was last stretched to, since
-        // nothing else would ever touch it again - the exact sticky-growth
-        // hazard CStackWidget::measureContent()/CFlexWidget::
-        // measureContent()'s own doc comments describe, except now closed
-        // at the SOURCE for every leaf type instead of needing each
-        // container type to separately guard against a stale value leaking
-        // in. Found live (DESIGN.md, Phase 15) via a `fill` root Stack
-        // whose ONLY children were both `fill` - CStackWidget::
-        // measureContent()'s "count fill children at their own pre-stretch
-        // size when there's nothing else" fallback initially reused
-        // whatever a leaf's `m_size` currently held, which - before this
-        // fix - could still be a stale, already-stretched value from
-        // several frames ago, not a genuine pre-stretch one.
+        // This is what makes a leaf self-correcting after a `fill`
+        // stretch: without resetting every frame, m_size would stay
+        // pinned at whatever it was last stretched to (setFill(), applied
+        // via setSize() during arrange()), since nothing else would ever
+        // touch it again.
         virtual void measureContent() {
             m_size = m_naturalSize;
         }
 
-        // Positions m_children (their setPosition()) based on this
-        // widget's own m_size. Default: no-op - right for leaves and for
-        // CStackWidget, whose children keep whatever absolute position
-        // they were given. Flex containers override this.
+        // Positions m_children based on this widget's own m_size. Default:
+        // no-op - right for leaves and CStackWidget (children keep
+        // whatever absolute position they were given). Flex containers
+        // override this.
         virtual void                                       arrangeChildren() {}
 
         std::string                                        m_id;
         Vector2D                                           m_position;
         Vector2D                                           m_size;
-        Vector2D                                           m_naturalSize; // Phase 15 follow-up - see primeNaturalSize()'s doc comment
+        Vector2D                                           m_naturalSize; // see primeNaturalSize()
         bool                                               m_visible = true;
         std::optional<double>                              m_fixedW, m_fixedH;
-        bool                                               m_fill = false; // Phase 15 - see setFill()'s doc comment
+        bool                                               m_fill = false; // see setFill()
         std::optional<double>                              m_minW, m_minH, m_maxW, m_maxH;
         SEdgeInsets                                        m_padding, m_margin;
         double                                             m_opacity = 1.0;
@@ -1051,38 +770,27 @@ namespace HyprLUI {
         std::function<void(double delta, bool vertical)>   m_onScroll;
         std::function<void()>                              m_onClick;
         std::vector<PWidget>                               m_children;
-        PHLANIMVAR<float>                                  m_visibilityAnim; // Phase 13 - lazily created only once setVisible() actually animates, see CWidgetAnimations
+        PHLANIMVAR<float>                                  m_visibilityAnim; // lazily created only once setVisible() actually animates, see CWidgetAnimations
         SP<Hyprutils::Animation::SAnimationPropertyConfig> m_animationInOverride,
-            m_animationOutOverride; // Phase 13 follow-up - per-widget animationIn/animationOut override, null = use the global config
+            m_animationOutOverride; // per-widget animationIn/animationOut override, null = use the global config
 
       private:
         // Merges m_debugSpec into `inherited` ("mine wins per-field if
-        // set, else keep theirs") - see SDebugSpec's doc comment. Defined
-        // in Widget.cpp alongside renderDebug()/drawDebugOverlay(), which
-        // are the only callers.
+        // set, else keep theirs"). Defined in Widget.cpp alongside
+        // renderDebug()/drawDebugOverlay(), its only callers.
         SDebugSpec resolveDebugSpec(const SDebugSpec& inherited) const;
 
-        // Draws this widget's box-model overlay (margin/padding/content
-        // outlines, id/size/padding/margin/z-opacity labels, hit-target
-        // fill) per `resolved`'s already-merged show* decisions - auto
-        // (nullopt) categories are decided here, from this widget's own
-        // size (and, for z/opacity, whether it's at a non-default value).
-        // `origin` is this widget's PARENT's already-accumulated absolute
-        // position, same convention as render()/hitTest(). Returns the
-        // union of every pixel actually drawn (at least this widget's own
-        // box, even if nothing else ended up drawn) - see renderDebug()'s
-        // own doc comment for why. See Widget.cpp.
+        // Draws this widget's box-model overlay per `resolved`'s already-
+        // merged show* decisions - auto (nullopt) categories are decided
+        // here, from this widget's own size. `origin` is the parent's
+        // already-accumulated absolute position. Returns the union of
+        // every pixel actually drawn (at least this widget's own box).
         CBox drawDebugOverlay(const Vector2D& origin, const SDebugSpec& resolved) const;
 
-        // Render()/hitTest()'s shared paint-order: a stable sort of
+        // render()/hitTest()'s shared paint-order: a stable sort of
         // m_children by zIndex() (ascending - lower paints first/behind).
-        // Stable so equal-zIndex siblings (the default, everyone at 0) keep
-        // plain insertion order - identical to the pre-Phase-7 unsorted
-        // walk when zIndex is never set. Recomputed on every render()/
-        // hitTest() call rather than cached - cheap at HUD-sized child
-        // counts, matches this codebase's established "redo it every
-        // frame instead of tracking a dirty flag" precedent (see Widget.
-        // hpp's own measure()/arrange(), CFlexWidget's layout, etc.).
+        // Recomputed every call rather than cached - cheap at HUD-sized
+        // child counts.
         std::vector<CWidget*> paintOrder() const {
             std::vector<CWidget*> order;
             order.reserve(m_children.size());

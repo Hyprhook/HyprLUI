@@ -5,22 +5,16 @@
 // A focusable rectangle that behaves like an actual text field by default:
 // typing a printable-ASCII key appends it, Backspace removes the last
 // character, and the current text is rendered automatically (via an
-// internally-owned CTextNode child, reusing its existing rasterization -
-// not reimplemented here) - none of that is left for a caller to build
-// from scratch in Lua. Still "raw keysym only" in one specific sense (see
-// DESIGN.md Phase 6): no cursor/selection/IME, no non-ASCII input, no
-// clipboard - a caller wanting any of that layers it on top of onKey,
-// which keeps firing for every key exactly as before, in addition to (not
-// instead of) the built-in capture.
+// internally-owned CTextNode child, reusing its existing rasterization).
+// No cursor/selection/IME/non-ASCII/clipboard - a caller wanting any of
+// that layers it on top of onKey, which keeps firing for every key
+// regardless, in addition to (not instead of) the built-in capture.
 //
 // Focus itself is NOT this class's job - CUIManager owns the single global
 // "which Input currently has focus" slot (see UIManager.hpp's
 // m_focusedInput) and calls focus()/blur()/handleKey() on whichever widget
 // that resolves to. This class only reacts when told to; it never grabs or
-// releases focus on its own. Same Lua-agnostic split as CButtonWidget:
-// LuaBridge.cpp owns wrapping Lua function refs into the std::functions
-// passed to setOnKey()/setOnFocus()/setOnBlur()/setOnChange(), including
-// their lifetime.
+// releases focus on its own.
 
 #include "Widget.hpp"
 #include "TextNode.hpp"
@@ -89,7 +83,7 @@ namespace HyprLUI {
         // that currently triggers a real Hyprland keybind - InputHook.cpp
         // filters those out before CUIManager::dispatchKey() ever runs,
         // so this widget can assume every key it sees is genuinely local
-        // to it (see DESIGN.md Phase 6's keybind-priority note).
+        // to it.
         void handleKey(uint32_t keysym, bool pressed);
         void focus() {
             if (m_onFocus)
@@ -103,7 +97,7 @@ namespace HyprLUI {
       protected:
         // A hit-testing leaf, same reasoning as CButtonWidget - no nested
         // interactive widgets inside an Input. Excludes disabled inputs
-        // too (Phase 10) - also makes a disabled Input unfocusable, since
+        // too, which also makes a disabled Input unfocusable since
         // click-to-focus goes through this same hit-test (focus_widget()
         // is separately guarded in CUIManager::focusWidget()).
         CWidget* hitTest(const Vector2D& origin, const Vector2D& point, const Vector2D& scale = {1, 1}) override {

@@ -5,49 +5,19 @@
 // Composes every exclusive HyprLUI window's contribution into each
 // monitor's reserved area (Desktop::CReservedArea, PHLMONITOR->
 // m_reservedArea) - the mechanism that makes a tiled window layout
-// actually leave space for a bar/dock-style window, matching eww's
-// `exclusive` flag or a wlr-layer-shell surface's exclusive zone.
+// actually leave space for a bar/dock-style window. Uses the *static*
+// tier (setStatic(), a flat overwrite) rather than Hyprland's dynamic
+// slots, which are a closed enum with no plugin-usable entry - see
+// DESIGN.md's Architecture section 4 for the fuller picture.
 //
-// Verified before implementing (research pass, mirrors this project's
-// established practice for internal-API-reliant phases): Desktop::
-// CReservedArea (Hyprland's src/desktop/reserved/ReservedArea.hpp) has
-// two storage tiers - a "static" one (set via setStatic(), overwritten
-// wholesale, no composition) and a "dynamic" one, indexed by a CLOSED
-// enum (eReservedDynamicType: only RESERVED_DYNAMIC_TYPE_LS and
-// RESERVED_DYNAMIC_TYPE_ERROR_BAR exist - no plugin-usable slot). Both
-// built-in dynamic slots get reset-and-recomputed by Hyprland's own core
-// code on every relevant layout pass (real layer-shell surfaces / the
-// crash error bar respectively), so a plugin piggybacking on either would
-// have its contribution silently wiped out whenever that unrelated
-// subsystem recalculates - not usable.
-//
-// So: this composer uses the *static* tier, the same one the user's own
-// `monitor{ ..., reserved: ... }` config rule uses
-// (CMonitor::applyMonitorRuleSoft(), src/output/Monitor.cpp:673-675, does
-// exactly `m_reservedArea.setStatic(m_activeMonitorRule.m_reservedArea)`).
-// setStatic() is a flat overwrite, not additive - so every recompute here
-// reads the user's true baseline fresh from `pMonitor->
-// m_activeMonitorRule.m_reservedArea` (never from the live, possibly-
-// already-plugin-modified `m_reservedArea` itself, which would double-
-// count our own prior contribution) and writes back baseline + our own
-// composed total. Because applyMonitorRuleSoft() re-runs that same
-// setStatic() call on every config reload AND on every monitor
-// (re)configuration, discarding whatever we'd previously composed in,
-// reapplyAll() must be called after BOTH `Event::bus()->
-// m_events.config.reloaded` and `...monitor.layoutChanged` fire (see
-// .cpp - they're genuinely different triggers: a Lua config error being
-// resolved is a reload with no monitor geometry change at all, confirmed
-// live - the earlier layoutChanged-only version left exactly that case
-// unhandled) - this is a known, unavoidable v1 characteristic of the
-// API, not a bug: there is currently no way for a plugin to be told
-// "only the static tier changed, and only from your own last write" as
-// opposed to "something else just re-applied it out from under you".
-// reapplyAll() also has to bypass recompute()'s normal diff-check (see
-// its `force` parameter) - the number we'd recompute can be identical to
-// what we last cached even when what's actually live no longer matches,
-// since neither the config baseline value nor our own sum necessarily
-// changed, only the live object's contents (reset by whatever external
-// event just fired).
+// Every recompute reads the user's own `monitor{reserved:...}` baseline
+// fresh (never the live, possibly-already-plugin-modified value, which
+// would double-count our own prior write) and writes back baseline + our
+// own composed total. Hyprland re-applies the config baseline - wiping
+// our contribution - on both a config reload and a monitor layout change,
+// which are genuinely different, both-required triggers (a Lua config
+// error being resolved is a reload with no geometry change at all) - so
+// reapplyAll() listens for both.
 
 #include "../ui/Canvas.hpp" // for EEdge - same "which edge" concept as EAnchor, defined there
 
@@ -106,9 +76,11 @@ namespace HyprLUI {
             bool        active = true;
         };
 
-        // `force`: bypass the m_lastApplied diff-check (see reapplyAll()'s
-        // doc comment for why this is sometimes necessary, not just an
-        // optimization to skip).
+        // `force`: bypass the m_lastApplied diff-check - needed when an
+        // external event (reload, hotplug) may have overwritten the
+        // monitor's static tier out from under us, since the number we'd
+        // recompute can be identical to the cache even though the live
+        // value no longer matches it.
         void                                           recompute(const std::string& monitorName, bool force = false);
 
         std::unordered_map<std::string, SContribution> m_contributions; // keyed by window name

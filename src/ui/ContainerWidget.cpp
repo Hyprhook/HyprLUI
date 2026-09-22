@@ -9,14 +9,9 @@ namespace HyprLUI {
         Vector2D bounds{0, 0};
         bool     anyCounted = false;
         for (const auto& child : m_children) {
-            // A `fill` child (Phase 15) is sized BY this stack, never the
-            // other way around - skip it here, same as CSS align-self:
-            // stretch never inflates its own parent's size. This is a
-            // DIRECTIONAL rule, not just an anti-staleness one - even with
-            // every widget now self-correcting every frame (see
-            // CWidget::measureContent()'s default in Widget.hpp), a fill
-            // child's own natural size still has no business feeding back
-            // into what it's stretching to match.
+            // A `fill` child is sized BY this stack, never the other way
+            // around - skip it here, same as CSS align-self: stretch never
+            // inflates its own parent's size.
             if (child->fill())
                 continue;
             anyCounted = true;
@@ -24,28 +19,14 @@ namespace HyprLUI {
             bounds.y   = std::max(bounds.y, child->position().y + child->size().y);
         }
 
-        // Degenerate case (DESIGN.md's "canvas damage tracking" open
-        // question): if EVERY child is `fill`, the loop above counted
-        // nothing at all - falling back to bounds{0,0} here would be
-        // actively wrong, not just imprecise: this stack's own m_size
-        // (and so every CCanvas damage box derived from it - see
-        // Canvas.cpp) would go stuck at zero even while these children
-        // keep rendering their own real, non-zero content, so no damage
-        // call anywhere would ever validly cover what's actually drawn -
-        // silently ghosting on open AND on close. Falling back to
-        // counting the fill children at their own PRE-STRETCH size
-        // instead matches what setFill()'s doc comment already promises
-        // ("nothing to stretch TO stays at its own natural size") and
-        // keeps m_size honest. Relies on every widget's measure() pass
-        // (Widget.hpp) having ALREADY reset each child to its genuine
-        // natural size, THIS frame, before this parent's own
-        // measureContent() runs - true for every widget type now (a leaf's
-        // default measureContent() self-corrects from its own
-        // primeNaturalSize()'d value, exactly like a container already
-        // recomputed fresh from children), not just containers - see that
-        // default's own doc comment for the live bug this closes (this
-        // fallback briefly shipped without it and re-read a leaf's stale,
-        // already-stretched m_size instead).
+        // If EVERY child is `fill`, the loop above counted nothing, and
+        // falling back to bounds{0,0} would leave this stack's own m_size
+        // (and every damage box derived from it) stuck at zero even while
+        // these children keep rendering real content. Fall back to
+        // counting the fill children at their own pre-stretch size instead
+        // - relies on every widget's measure() pass having already reset
+        // each child to its natural size this frame, before this parent's
+        // own measureContent() runs.
         if (!anyCounted && !m_children.empty()) {
             for (const auto& child : m_children) {
                 bounds.x = std::max(bounds.x, child->position().x + child->size().x);
@@ -76,20 +57,16 @@ namespace HyprLUI {
                 main += m_gap;
             first = false;
 
-            // A child's own margin (Phase 7) adds to, not instead of,
-            // `gap` - same as CSS flexbox: the visual space between two
-            // adjacent items ends up being gap + item1's trailing margin +
-            // item2's leading margin.
+            // A child's own margin adds to, not instead of, `gap` - same
+            // as CSS flexbox: the visual space between two adjacent items
+            // ends up being gap + item1's trailing margin + item2's
+            // leading margin.
             const auto& m = child->margin();
             if (m_direction == EFlexDirection::Row) {
                 main += m.left + child->size().x + m.right;
-                // A `fill` child (Phase 15) stretches to match this row's
-                // CROSS-axis size - it must not also CONTRIBUTE to that
-                // same size, same as CSS align-self: stretch never
-                // inflates its own parent (a directional rule, see
-                // CStackWidget::measureContent()'s own doc comment). The
-                // MAIN axis is unaffected either way - fill never touches
-                // it, so it's always safe to count normally.
+                // A `fill` child stretches to match this row's cross-axis
+                // size - it must not also contribute to that same size.
+                // The main axis is unaffected either way.
                 if (!child->fill()) {
                     cross        = std::max(cross, m.top + child->size().y + m.bottom);
                     crossCounted = true;
@@ -103,15 +80,9 @@ namespace HyprLUI {
             }
         }
 
-        // Degenerate case, same reasoning (and same DESIGN.md open
-        // question) as CStackWidget::measureContent()'s own fallback
-        // above: if EVERY child is `fill`, the cross axis counted nothing
-        // at all above and would otherwise stay stuck at 0 - which this
-        // row/column's own CCanvas damage tracking would then silently
-        // inherit. Fall back to the fill children's own pre-stretch cross
-        // sizes instead - safe (not stale) for the same reason
-        // CStackWidget::measureContent()'s own fallback is, see its doc
-        // comment.
+        // Same degenerate-case fallback as CStackWidget::measureContent()
+        // above, for the same reason - if every child is `fill`, fall back
+        // to their pre-stretch cross sizes instead of staying stuck at 0.
         if (!crossCounted && !m_children.empty()) {
             for (const auto& child : m_children) {
                 const auto& m = child->margin();
@@ -153,12 +124,9 @@ namespace HyprLUI {
 
             double       crossPos = crossPadLead + crossLead;
             if (child->fill()) {
-                // Cross-axis stretch (Phase 15, DESIGN.md) - fills the
-                // whole available cross-axis space for this child,
-                // ignoring `align` entirely (there's no room left to
-                // align within once this fills it). The MAIN axis is
-                // untouched - only the cross-axis component of size is
-                // overridden here.
+                // Cross-axis stretch fills the whole available cross-axis
+                // space for this child, ignoring `align` entirely - the
+                // main axis is untouched, only the cross-axis size.
                 childCross = availForThis;
                 if (m_direction == EFlexDirection::Row)
                     child->setSize({child->size().x, childCross});
@@ -169,14 +137,9 @@ namespace HyprLUI {
             else if (m_align == EAlign::End)
                 crossPos = crossPadLead + availableCross - crossTrail - childCross;
 
-            // Rounded to whole pixels - EAlign::Center's own `/ 2.0` above
-            // can land on a fractional pixel whenever (availForThis -
-            // childCross) is odd. Found live: a texture (text especially)
-            // drawn 1:1 but at a fractional destination offset still
-            // samples a blended average of two adjacent texels per pixel
-            // under Hyprland's GL_LINEAR filtering, instead of one exact
-            // texel each - visibly blurry. See Canvas.cpp's
-            // recomputeAnchorPosition() for the same fix, same reasoning.
+            // Rounded to whole pixels - see Canvas.cpp's
+            // recomputeAnchorPosition() for why (GL_LINEAR blur on a
+            // fractional destination offset).
             if (m_direction == EFlexDirection::Row)
                 child->setPosition({std::round(offset + mainLead), std::round(crossPos)});
             else

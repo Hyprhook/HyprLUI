@@ -43,12 +43,8 @@ namespace HyprLUI::Lua {
 
     namespace {
 
-        // --- lua_State argument helpers ---------------------------------
-        // Widget-spec tables (Stack{}/Row{}/Column{}/Text{}/Box{}/window{})
-        // all take a single table argument, mirroring hl.notification.create
-        // so optional fields stay readable at the call site. These helpers
-        // read fields off the table at `idx` and raise a Lua error (via
-        // luaL_error, which longjmps - never returns) on a type mismatch.
+        // Reads a field off the table at `idx`, raising a Lua error
+        // (luaL_error, never returns) on a type mismatch.
 
         double fieldNumber(lua_State* L, int idx, const char* key, double def) {
             lua_getfield(L, idx, key);
@@ -59,13 +55,9 @@ namespace HyprLUI::Lua {
             return value;
         }
 
-        // Generic "this numeric field, if the caller actually gave one" -
-        // used for setFixedSize()'s w/h originally, and reused as-is for
-        // every other optional numeric widget property Phase 7 added
-        // (minW/minH/maxW/maxH, opacity, zIndex) - nullopt (as opposed to
-        // some baked-in numeric default) is what lets buildWidget() below
-        // leave a widget's own constructor-chosen default alone when the
-        // Lua spec doesn't mention the field at all.
+        // An optional numeric field - nullopt (not a baked-in default)
+        // lets buildWidget() leave a widget's own constructor-chosen
+        // default alone when the Lua spec doesn't mention the field.
         std::optional<double> optFixedField(lua_State* L, int idx, const char* key) {
             lua_getfield(L, idx, key);
             std::optional<double> value;
@@ -111,11 +103,9 @@ namespace HyprLUI::Lua {
             return value;
         }
 
-        // Tri-state boolean read - nullopt (as opposed to some baked-in
-        // default) when the field is absent, for fields where "the caller
-        // didn't say anything" is itself a meaningful, distinct state
-        // (e.g. the debug-overlay fields below, where nullopt means
-        // "inherit"/"auto" rather than any concrete true/false).
+        // Tri-state boolean read - nullopt when absent, for fields where
+        // "the caller didn't say anything" is itself a meaningful state
+        // (e.g. the debug-overlay fields below: nullopt means "inherit").
         std::optional<bool> optFieldBoolOpt(lua_State* L, int idx, const char* key) {
             lua_getfield(L, idx, key);
             std::optional<bool> value;
@@ -157,9 +147,8 @@ namespace HyprLUI::Lua {
         }
 
         // Same accepted shapes as parseColorField() above, but for
-        // optional color fields (Phase 10's hoverColor/disabledColor)
-        // where absence is itself meaningful (no override) rather than
-        // falling back to some baked-in default color.
+        // optional color fields where absence means "no override" rather
+        // than a baked-in default color.
         std::optional<CHyprColor> optColorField(lua_State* L, int idx, const char* key, const char* fnName) {
             lua_getfield(L, idx, key);
             if (lua_isnil(L, -1)) {
@@ -170,14 +159,10 @@ namespace HyprLUI::Lua {
             return parseColorField(L, idx, key, CHyprColor{}, fnName);
         }
 
-        // `borderColor`-shaped fields (Phase 19): accepts the SAME shapes
-        // as parseColorField() above (a plain solid color), OR a table
-        // `{ colors = {...}, angle = degrees }` mirroring Hyprland's own
-        // `general:col.active_border` gradient syntax (a list of 1+
-        // colors plus a rotation angle in degrees, matched exactly - see
-        // Config::CGradientValueData, which already treats a single color
-        // as the one-color-list case of a gradient, not a separate type).
-        // One parser for both shapes rather than two, since the C++ type
+        // `borderColor`-shaped fields: accepts the same shapes as
+        // parseColorField() above, or a table `{ colors = {...}, angle =
+        // degrees }` mirroring Hyprland's own `general:col.active_border`
+        // gradient syntax. One parser for both shapes since the C++ type
         // on the other end (CGradientValueData) already doesn't
         // distinguish them.
         Config::CGradientValueData parseGradientField(lua_State* L, int idx, const char* key, const CHyprColor& def, const char* fnName) {
@@ -238,26 +223,13 @@ namespace HyprLUI::Lua {
             return Config::CGradientValueData(std::move(colors), static_cast<float>(angleDeg * (M_PI / 180.0)));
         }
 
-        // Resolves EITHER a `bezier` or `spring` field on the table at
-        // `idx`, mirroring Hyprland's own hl.animation()'s exact
-        // precedence (bezier checked first, falling back to spring only
-        // if bezier isn't given) and encoding: a chosen spring becomes
-        // the string "spring:<name>" - the SAME internalBezier field a
-        // plain bezier name would use (confirmed by reading Hyprland's
-        // own hlAnimation(), LuaBindingsConfigRules.cpp:
-        // `curveName = std::format("spring:{}", springName)`).
-        // Hyprland's own CBaseAnimatedVariable recognizes that prefix
-        // internally when actually consuming a curve, so HyprLUI never
-        // has to interpret it itself - this is a plain pass-through, same
-        // as a bezier name always was. Springs are registered process-
-        // wide the same way beziers are (Animation::mgr()->
-        // addSpringWithName(), via the user's own hl.curve({type=
-        // "spring", ...}) calls), so a spring a user already defined for
-        // window animations is reusable here by name, same as a bezier.
-        // Falls back to plain bezier "default" if NEITHER is given -
-        // unlike hl.animation()'s own stricter requirement (errors if
-        // neither is given), kept lenient to match this project's
-        // already-established default.
+        // Resolves a `bezier` or `spring` field on the table at `idx`
+        // (bezier takes precedence if both are given, matching
+        // hl.animation()). A spring resolves to "spring:<name>" - the
+        // same internalBezier encoding Hyprland's own hlAnimation() uses,
+        // recognized by CBaseAnimatedVariable without HyprLUI needing to
+        // interpret it itself. Falls back to bezier "default" if neither
+        // is given (unlike hl.animation()'s stricter requirement).
         std::string resolveCurveField(lua_State* L, int idx, const std::string& errPrefix) {
             lua_getfield(L, idx, "bezier");
             const bool hasBezier = !lua_isnil(L, -1);
@@ -284,26 +256,15 @@ namespace HyprLUI::Lua {
             return "default";
         }
 
-        // Phase 16/17/18 (DESIGN.md): the `style` field shared by
-        // hyprlui.animation() and animationIn/animationOut (below) - reuses
-        // Hyprland's OWN windowsIn/windowsOut style syntax
-        // (WindowAnimationController.cpp): "slide" or "slide
-        // left|right|top|bottom" (MINUS its "no direction -> auto-pick
-        // nearest monitor edge" behavior - needs monitor geometry a plain
-        // widget doesn't have; CWidget::styleOffset(), Widget.hpp, always
-        // falls back to "left" instead, for both widgets and window roots
-        // alike); "popin" or "popin N%" (N is the minimum size percentage
-        // to shrink to, default 0 if omitted, matching Hyprland's own
-        // default - see CWidget::popinTransform()); "gnome"/"gnomed"
-        // (either spelling, matching Hyprland accepting both). All three
-        // apply to ANY widget, not just a window's root (Phase 18 widened
-        // popin/gnome from Phase 17's original window-root-only cut - see
-        // DESIGN.md) - a widget's own popin/gnome shrinks/squashes itself
-        // AND its whole subtree together as one rigid unit, composing
-        // multiplicatively with whatever scale its own ancestors already
-        // contributed. Returns "" (falsy, "no style") if the field is
-        // absent - matches hyprlui.animation()'s own "" bezier-or-spring
-        // absent-field convention.
+        // Validates the `style` field shared by hyprlui.animation() and
+        // animationIn/animationOut - reuses Hyprland's own windowsIn/
+        // windowsOut syntax ("slide"/"slide left|right|top|bottom",
+        // "popin"/"popin N%", "gnome"/"gnomed"), minus its "no direction
+        // -> auto-pick nearest monitor edge" behavior (CWidget::
+        // styleOffset() always falls back to "left" instead, since a
+        // plain widget has no monitor geometry to pick against). Returns
+        // "" if the field is absent. See docs/api.md for the full syntax
+        // reference and behavior.
         std::string optStyleField(lua_State* L, int idx, const std::string& errPrefix) {
             const auto style = optFieldString(L, idx, "style", "");
             if (style.empty() || style == "slide" || style == "popin" || style == "gnome" || style == "gnomed")
@@ -327,22 +288,11 @@ namespace HyprLUI::Lua {
             return {}; // unreachable - silences -Wreturn-type
         }
 
-        // Phase 13 follow-up (`style` added Phase 16, see optStyleField()
-        // above): a widget's own `animationIn`/`animationOut` field (see
-        // buildWidget()'s common tail) - a per-widget override of
-        // hyprlui.animation()'s global "in"/"out" config, self-contained
-        // like the global one's own table shape (leaf implied by which
-        // field this is), not a partial merge with it. Returns nullptr if
-        // the field isn't present at all (the common case - "use the
-        // global config for this widget"). `speed` is only required when
-        // the table doesn't explicitly set `enabled = false` - same
-        // conditional-requirement shape as hl.animation()/
-        // hyprlui.animation() themselves. Applies identically whether this
-        // widget is an ordinary widget or happens to be a window's own
-        // root (CCanvas::setVisible() delegates entirely to the root - see
-        // its own doc comment) - `style`'s position-slide effect
-        // (CWidget::styleOffset()) is therefore available on ANY widget,
-        // not just windows, same as opacity fade already was.
+        // Parses a widget's own `animationIn`/`animationOut` field - a
+        // per-widget override of hyprlui.animation()'s global "in"/"out"
+        // config, self-contained (not a partial merge with the global
+        // one). Returns nullptr if the field is absent (the common case -
+        // use the global config for this widget).
         SP<Hyprutils::Animation::SAnimationPropertyConfig> optAnimationOverrideField(lua_State* L, int idx, const char* key, const char* fnName) {
             lua_getfield(L, idx, key);
             if (lua_isnil(L, -1)) {
@@ -371,16 +321,12 @@ namespace HyprLUI::Lua {
             return cfg;
         }
 
-        // `padding`/`margin` fields (Phase 7) accept either a single
-        // number (applied uniformly to all four sides, the common case)
-        // or a table { top, right, bottom, left } (each defaulting to 0
-        // when only some sides are given - CSS shorthand-table
-        // convention, not the widget's own overall default). Returns
-        // nullopt if the field is absent entirely, so buildWidget() below
-        // can leave a widget's own constructor-chosen default (e.g.
-        // CInputWidget's built-in left padding) alone rather than
-        // clobbering it with an all-zero SEdgeInsets{} just because the
-        // Lua spec didn't mention the field.
+        // `padding`/`margin` fields accept either a single number (all
+        // four sides) or a table { top, right, bottom, left } (each
+        // defaulting to 0 when only some sides are given). Returns
+        // nullopt if absent, so buildWidget() can leave a widget's own
+        // constructor-chosen default (e.g. CInputWidget's left padding)
+        // alone instead of clobbering it with an all-zero SEdgeInsets{}.
         std::optional<SEdgeInsets> optInsetsField(lua_State* L, int idx, const char* key, const char* fnName) {
             lua_getfield(L, idx, key);
 
@@ -427,14 +373,12 @@ namespace HyprLUI::Lua {
             return result;
         }
 
-        // --- widget constructors: Stack/Row/Column/Text/Box ---------------
-        // Each just tags its table argument with a __type field and hands
-        // it straight back - the actual tree gets built later, once, when
-        // the whole thing reaches window{}. This is what makes
+        // Tags a widget's table argument with a __type field and hands it
+        // straight back - the actual tree gets built later, once the
+        // whole thing reaches window{}. This is what makes
         // `Column{ gap = 8, Text{...} }` work: Text{} evaluates first and
-        // its (tagged) return value becomes positional entry [1] of the
+        // its tagged return value becomes positional entry [1] of the
         // Column table via ordinary Lua table-constructor semantics.
-
         int tagWidget(lua_State* L, const char* type) {
             luaL_checktype(L, 1, LUA_TTABLE);
             lua_pushstring(L, type);
@@ -474,11 +418,10 @@ namespace HyprLUI::Lua {
             return tagWidget(L, "checkbox");
         }
 
-        // Unlike the other constructors, hyprlui.Bind(name) takes a plain
-        // string, not a table - it just wraps it into a {__bind = name}
-        // marker table so buildWidget() (via fieldBindName() above) can
-        // tell "this field should track watcher `name`" apart from "this
-        // field is literally the string `name`".
+        // hyprlui.Bind(name) takes a plain string, not a table - wraps it
+        // into a {__bind = name} marker table so buildWidget() (via
+        // fieldBindName() above) can tell "track watcher `name`" apart
+        // from "the field is literally the string `name`".
         int luaBind(lua_State* L) {
             const std::string name = luaL_checkstring(L, 1);
             lua_newtable(L);
@@ -488,12 +431,10 @@ namespace HyprLUI::Lua {
         }
 
         // Wraps a LUA_REGISTRYINDEX reference so the Lua function it
-        // points to gets released exactly once, whenever the last copy of
-        // the owning std::function (and thus this) is destroyed - i.e.
-        // when the CButtonWidget holding it is torn down (its window/
-        // widget removed). Held via shared_ptr in fieldOnClick()'s
-        // returned closure since std::function requires its target type
-        // to be copyable, which a bare move-only RAII guard wouldn't be.
+        // points to is released exactly once, when the last copy of the
+        // owning std::function is destroyed. Held via shared_ptr since
+        // std::function requires its target to be copyable, which a bare
+        // move-only RAII guard wouldn't be.
         struct SLuaFnRef {
             lua_State* L   = nullptr;
             int        ref = LUA_NOREF;
@@ -507,11 +448,9 @@ namespace HyprLUI::Lua {
         // Reads a zero-argument Lua-function field (onClick, onFocus,
         // onBlur, ...) off the table at `idx`, if present, and returns a
         // std::function that invokes it via lua_pcall, logging (not
-        // propagating) any error - these fire from InputHook.cpp's mouse/
-        // keyboard callbacks, which have no pcall of their own to catch a
-        // mistake in the handler, same reasoning as CWatcherManager's
-        // callWatcherFn(). Returns an empty std::function (falsy) if
-        // `fieldName` is absent.
+        // propagating) any error - these fire from input-handling
+        // callbacks with no pcall of their own. Returns an empty
+        // std::function (falsy) if `fieldName` is absent.
         std::function<void()> fieldZeroArgFn(lua_State* L, int idx, const char* fieldName) {
             lua_getfield(L, idx, fieldName);
             if (!lua_isfunction(L, -1)) {
@@ -520,14 +459,10 @@ namespace HyprLUI::Lua {
             }
 
             const int ref = luaL_ref(L, LUA_REGISTRYINDEX); // pops the function value
-            // Constructed in place (C++20 aggregate-init-via-parens), NOT
-            // via std::make_shared<SLuaFnRef>(SLuaFnRef{L, ref}) - that
-            // form builds a temporary SLuaFnRef first and copies it in,
-            // and the temporary's destructor then unrefs the slot
-            // immediately, before the callback is ever invoked. Caught
-            // live on onClick: the registry slot got reused for something
-            // else by click time, so lua_rawgeti() below pushed whatever
-            // now occupied it instead of the callback.
+            // Constructed in place, NOT via
+            // make_shared<SLuaFnRef>(SLuaFnRef{L, ref}) - that form builds
+            // a temporary first and copies it in, whose destructor unrefs
+            // the slot immediately, before the callback is ever invoked.
             auto fnRef = std::make_shared<SLuaFnRef>(L, ref);
 
             return [L, fnRef, fieldName]() {
@@ -540,10 +475,8 @@ namespace HyprLUI::Lua {
             };
         }
 
-        // Same shape as fieldZeroArgFn() above, but for `onKey` - the one
-        // callback that actually takes arguments (keysym, pressed).
-        // `keysym` is an xkb_keysym_t (already resolved, layout/shift-
-        // aware) - see InputHook.cpp's onKeyboardKey().
+        // Same shape as fieldZeroArgFn() above, but for `onKey(keysym,
+        // pressed)` - keysym is an already-resolved xkb_keysym_t.
         std::function<void(uint32_t, bool)> fieldOnKey(lua_State* L, int idx) {
             lua_getfield(L, idx, "onKey");
             if (!lua_isfunction(L, -1)) {
@@ -566,10 +499,9 @@ namespace HyprLUI::Lua {
             };
         }
 
-        // Same shape again, but for `onChange` - fires with the Input's
-        // current text after it changes from typing/Backspace (not from
-        // a programmatic set_input_text() call - see CInputWidget::
-        // setText()'s doc comment).
+        // Same shape again, but for `onChange(text)` - fires only on a
+        // real edit (typing/Backspace), not a programmatic
+        // set_input_text() call.
         std::function<void(const std::string&)> fieldOnChange(lua_State* L, int idx) {
             lua_getfield(L, idx, "onChange");
             if (!lua_isfunction(L, -1)) {
@@ -591,10 +523,9 @@ namespace HyprLUI::Lua {
             };
         }
 
-        // Same shape again, but for a Checkbox's `onChange` - fires with
-        // the NEW checked state after a real click toggles it (not from a
-        // programmatic set_checkbox_checked() call, same "no invocation on
-        // load/programmatic set" convention as Input's onChange above).
+        // Same shape again, but for a Checkbox's `onChange(checked)` -
+        // fires only on a real click, not a programmatic
+        // set_checkbox_checked() call.
         std::function<void(bool)> fieldOnChangeBool(lua_State* L, int idx) {
             lua_getfield(L, idx, "onChange");
             if (!lua_isfunction(L, -1)) {
@@ -616,10 +547,8 @@ namespace HyprLUI::Lua {
             };
         }
 
-        // Same shape again, but for `onScroll` (Phase 10) - fires with the
-        // raw IPointer::SAxisEvent delta and whether the axis was vertical
-        // (the common mouse-wheel case) or horizontal, forwarded as-is, no
-        // attempt to normalize/invert it into a "lines scrolled" unit.
+        // Same shape again, but for `onScroll(delta, vertical)` - delta
+        // is the raw axis-event value, forwarded as-is, unnormalized.
         std::function<void(double, bool)> fieldOnScroll(lua_State* L, int idx) {
             lua_getfield(L, idx, "onScroll");
             if (!lua_isfunction(L, -1)) {
@@ -642,24 +571,14 @@ namespace HyprLUI::Lua {
             };
         }
 
-        // --- tree builder ------------------------------------------------
-        // Recursively converts a tagged widget-spec table (already on the
-        // Lua stack at `idx`) into a real CWidget subtree. `autoId` is a
-        // per-window counter used to synthesize ids for widgets that don't
-        // set one explicitly - they're unreachable by set_text/remove_widget
-        // but still valid tree nodes (e.g. a decorative Box). `bindings`
+        // Recursively converts a tagged widget-spec table (on the Lua
+        // stack at `idx`) into a real CWidget subtree. `autoId` synthesizes
+        // ids for widgets that don't set one explicitly. `bindings`
         // collects one closure per hyprlui.Bind()-tagged field found -
-        // luaWindow() attaches them to the finished CCanvas once it exists
-        // (a widget is built long before its owning canvas is). `seenIds`
-        // is a per-window set checked against every resolved id (explicit
-        // or auto-generated) - a duplicate is a hard error (Phase 9,
-        // DESIGN.md): previously silent (findWidget() just returns the
-        // first match, so set_text()/remove_widget()/etc. on the second
-        // widget silently landed on the first one instead), which is
-        // exactly the failure mode hyprlui.Component()'s own id-rewriting
-        // exists to avoid for its own instances - this closes the same
-        // gap for hand-written duplicate ids too, not just component ones.
-
+        // luaWindow() attaches them to the finished CCanvas once it exists.
+        // `seenIds` is a per-window set checked against every resolved id
+        // - a duplicate is a hard error (set_text()/remove_widget()/etc.
+        // address a widget by id and only ever find the first match).
         PWidget buildWidget(lua_State* L, int idx, int& autoId, std::vector<std::function<void()>>& bindings, std::unordered_set<std::string>& seenIds) {
             idx = lua_absindex(L, idx);
             luaL_checktype(L, idx, LUA_TTABLE);
@@ -708,12 +627,7 @@ namespace HyprLUI::Lua {
                 widget = image;
 
             } else if (type == "divider") {
-                // Sugar over a plain CRectNode with a computed w/h - a
-                // Divider has no behavior a Box doesn't already have, this
-                // exists purely so a caller doesn't have to remember "just
-                // make one axis 1px" by hand. `length` is the dimension
-                // along the divider's own axis (w if horizontal, h if
-                // vertical); `thickness` is the perpendicular one.
+                // Sugar over a plain CRectNode with a computed w/h.
                 const double thickness   = fieldNumber(L, idx, "thickness", 1);
                 const double length      = requireFieldNumber(L, idx, "length", "hyprlui.Divider");
                 const auto   orientation = optFieldString(L, idx, "orientation", "horizontal");
@@ -736,8 +650,8 @@ namespace HyprLUI::Lua {
                 const int    rounding    = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
                 const auto   borderColor = parseGradientField(L, idx, "borderColor", CHyprColor{}, "hyprlui.Button");
                 const int    borderWidth = static_cast<int>(fieldNumber(L, idx, "borderWidth", 0));
-                // onClick is parsed generically below (Phase 10 follow-up
-                // - CWidget's own field now, not Button-specific).
+                // onClick is parsed generically below - CWidget's own
+                // field, not Button-specific.
                 widget = std::make_shared<CButtonWidget>(id, Vector2D{x, y}, Vector2D{w, h}, color, rounding, borderColor, borderWidth);
 
             } else if (type == "input") {
@@ -830,15 +744,12 @@ namespace HyprLUI::Lua {
 
             widget->setVisible(visible);
 
-            // Base widget properties (Phase 7, DESIGN.md) - shared across
-            // every widget type via CWidget itself, so parsed generically
-            // here rather than per-type above. Each is only actually
-            // applied if the Lua spec mentions it at all (see
-            // optInsetsField()/optFixedField()'s doc comments) - so a
-            // widget whose constructor already chose a sensible built-in
-            // default (e.g. CInputWidget's left padding) keeps it instead
-            // of getting silently zeroed out just because the spec didn't
-            // repeat it.
+            // Base widget properties, shared across every widget type via
+            // CWidget itself - parsed generically here rather than
+            // per-type above. Each is only applied if the Lua spec
+            // actually mentions it (see optInsetsField()/optFixedField()),
+            // so a widget's own constructor-chosen default isn't silently
+            // zeroed out.
             if (auto padding = optInsetsField(L, idx, "padding", "hyprlui"))
                 widget->setPadding(*padding);
             if (auto margin = optInsetsField(L, idx, "margin", "hyprlui"))
@@ -859,14 +770,10 @@ namespace HyprLUI::Lua {
             if (auto zIndex = optFixedField(L, idx, "zIndex"))
                 widget->setZIndex(static_cast<int>(*zIndex));
 
-            // Debug overlay (post-Phase-7 addition, DESIGN.md) - `debug`
-            // is tri-state (absent = inherit from the nearest ancestor
-            // that hasn't walled itself off, see debugCascade below);
-            // `debugShow` forces individual detail categories on/off,
-            // bypassing the size-based "auto" default (see Widget.cpp's
-            // drawDebugOverlay()) - any category left out of the table
-            // stays auto/inherited, same "only touch what's mentioned"
-            // convention as every other field here.
+            // Debug overlay - `debug` is tri-state (absent = inherit from
+            // the nearest ancestor that hasn't walled itself off via
+            // debugCascade below); `debugShow` force-overrides individual
+            // detail categories, bypassing the size-based "auto" default.
             SDebugSpec debugSpec;
             debugSpec.enabled = optFieldBoolOpt(L, idx, "debug");
             lua_getfield(L, idx, "debugShow");
@@ -888,16 +795,12 @@ namespace HyprLUI::Lua {
             widget->setDebug(debugSpec);
             widget->setDebugCascade(optFieldBool(L, idx, "debugCascade", true));
 
-            // Interactive state (Phase 10, DESIGN.md) - hoverColor/
-            // disabledColor/onHoverStart/onHoverEnd/onScroll/disabled are
-            // only meaningful for a widget whose isInteractive() is true,
-            // but parsed generically here like everything else in this
-            // tail; a decorative widget setting them does nothing (see
-            // CWidget::setDisabled()'s doc comment). onClick is different
-            // - it's what actually MAKES a plain Box/Text/Image/Row/
-            // Column/Stack interactive in the first place (see Widget.
-            // hpp's hitTest()/isInteractive() defaults) rather than only
-            // doing something on a widget that already was.
+            // Interactive state - hoverColor/disabledColor/onHoverStart/
+            // onHoverEnd/onScroll/disabled only matter for a widget whose
+            // isInteractive() is true, but are parsed generically here; a
+            // decorative widget setting them does nothing. onClick is
+            // different - it's what actually MAKES a plain widget
+            // interactive in the first place.
             widget->setDisabled(optFieldBool(L, idx, "disabled", false));
             if (auto hoverColor = optColorField(L, idx, "hoverColor", "hyprlui"))
                 widget->setHoverColor(hoverColor);
@@ -912,35 +815,24 @@ namespace HyprLUI::Lua {
             if (auto onClick = fieldZeroArgFn(L, idx, "onClick"))
                 widget->setOnClick(std::move(onClick));
 
-            // Per-widget animation override (Phase 13 follow-up) - see
-            // optAnimationOverrideField()'s own doc comment. nullptr (the
-            // common case) leaves this widget on the global
+            // nullptr (the common case) leaves this widget on the global
             // hyprlui.animation() config for that leaf.
             widget->setAnimationInOverride(optAnimationOverrideField(L, idx, "animationIn", "hyprlui"));
             widget->setAnimationOutOverride(optAnimationOverrideField(L, idx, "animationOut", "hyprlui"));
 
             // Fixed-size override - meaningful for containers (whose w/h
-            // are genuinely optional) and Image (whose natural size comes
-            // from the decoded texture, same "size-to-content unless
-            // overridden" shape). Box's w/h above are its actual
-            // (required) dimensions, not an override, and Text derives
-            // its size from rasterization (no override exists for it).
+            // are genuinely optional) and Image (size-to-content unless
+            // overridden). Box's w/h above are its actual required
+            // dimensions, not an override; Text derives its size from
+            // rasterization.
             if (type == "stack" || type == "row" || type == "column" || type == "image")
                 widget->setFixedSize(optFixedField(L, idx, "w"), optFixedField(L, idx, "h"));
 
-            // Cross-axis stretch (Phase 15, DESIGN.md) - generic like
-            // disabled/hoverColor/etc. above, parsed for every widget type
-            // (not just containers), since ANY widget can be a Row/
-            // Column/Stack child, or a window's own root widget.
             widget->setFill(optFieldBool(L, idx, "fill", false));
 
-            // Snapshot this widget's own just-finished size as its natural/
-            // intrinsic content size (CWidget::primeNaturalSize()) - has to
-            // run AFTER every size-affecting step above (type-specific
-            // construction, the fixed-size override block), so a leaf's
+            // Must run AFTER every size-affecting step above, so a leaf's
             // default measureContent() has the right value to self-correct
-            // to every frame regardless of any later `fill` stretch. See
-            // primeNaturalSize()'s own doc comment.
+            // to every frame regardless of any later `fill` stretch.
             widget->primeNaturalSize();
 
             // Children: positional (ipairs-style) table entries.
@@ -998,14 +890,9 @@ namespace HyprLUI::Lua {
         }
 
         // Whether reserving `edge` makes sense for a window anchored at
-        // `anchor` - e.g. anchor="top" + exclusive="top" is a sensible
-        // top bar; anchor="top" + exclusive="left" is nonsensical (the
-        // window sits at the top, nowhere near the left edge, so
-        // "reserving left space" wouldn't even visually correspond to
-        // where the window actually is). Corner anchors (top-left etc.)
-        // touch two edges at once, so either is allowed - a corner-docked
-        // window could sensibly be a horizontal or a vertical bar.
-        // "center" allows neither - a centered window isn't at any edge.
+        // `anchor` (e.g. anchor="top" + exclusive="left" is nonsensical -
+        // the window isn't near the left edge). A corner anchor touches
+        // two edges, so either is allowed; "center" allows neither.
         bool anchorAllowsExclusiveEdge(EAnchor anchor, EEdge edge) {
             switch (anchor) {
                 case EAnchor::Top: return edge == EEdge::Top;
@@ -1020,8 +907,6 @@ namespace HyprLUI::Lua {
             }
             return false; // unreachable
         }
-
-        // --- hl.plugin.hyprlui.* implementations -------------------------
 
         int luaWindow(lua_State* L) {
             luaL_checktype(L, 1, LUA_TTABLE);
@@ -1074,57 +959,32 @@ namespace HyprLUI::Lua {
 
             const Vector2D size{fw ? *fw : root->size().x, fh ? *fh : root->size().y};
 
-            // No anchor: unchanged Phase 1 behavior - x/y are a raw global
-            // position, same escape hatch a Stack's children already use.
+            // No anchor: x/y are a raw global position.
             if (anchorStr.empty()) {
                 auto canvas = mgr.createCanvas(name, {x, y}, size, zorder);
                 canvas->setFixedSize(fw, fh);
                 for (auto& binding : bindings)
                     canvas->addBinding(std::move(binding));
                 canvas->setRoot(root);
-                // Same mechanism as any other setVisible(true) - see
-                // CWidget::primeHidden()'s doc comment for why the root
-                // needs to be primed hidden first: a plain setVisible(true)
-                // alone would have nothing to animate FROM.
+                // Primed hidden first - a plain setVisible(true) alone
+                // would have nothing to animate FROM.
                 root->primeHidden();
                 root->setVisible(true);
                 canvas->damage();
                 return 0;
             }
 
-            // Anchor given: x/y are reinterpreted as an offset from the
-            // anchor point (same "relative to parent" convention a
-            // widget's x/y already has relative to its parent widget),
-            // not a global position. `monitor` is optional and uses
-            // Hyprland's own monitor-selector syntax (same as window-rule
-            // "mon:" fields - direction chars/+N/-N/numeric id/static
-            // selector/output name), resolved relative to the currently
-            // focused monitor so e.g. "+1" means "one past focused". Note
-            // there's deliberately no "current"/"focused" keyword here -
-            // Hyprland's own selector parser treats the literal string
-            // "current" as a magic alias for whatever `.relativeTo()` was
-            // given (MonitorQueryCore.cpp's fromConfigString()), which
-            // would shadow an *actual* monitor a user has genuinely named
-            // "current" in their own monitor rules. So: omit `monitor`
-            // entirely to mean "the focused monitor", full stop - and if a
-            // given selector doesn't match anything (typo, output
-            // unplugged), fall back to the focused monitor too rather than
-            // erroring, since "couldn't find that exact spot, use the
-            // sensible default" is more useful here than failing the whole
-            // window. Resolved ONCE here, by name - see
-            // CCanvas::recomputeAnchorPosition().
+            // With `anchor`, x/y are reinterpreted as an offset from the
+            // anchor point, not a global position (see docs/api.md).
+            // `monitor` is resolved once here, by name - see
+            // CCanvas::recomputeAnchorPosition() for the per-frame
+            // re-read of that monitor's live box/reserved area.
             const EAnchor anchor = parseAnchor(L, anchorStr);
 
-            // `exclusive`: this window reserves screen-edge space along
-            // one of the four edges - the amount reserved is its own
-            // current size along the perpendicular axis (top/bottom ->
-            // height, left/right -> width), matching eww's `exclusive`
-            // flag. Parsed and validated here, BEFORE createCanvas()
-            // below - erroring after the canvas already exists would
-            // leave an orphaned, empty, undamaged entry registered under
-            // `name` in CUIManager forever (no root, never shown, but
-            // permanently blocking that name from ever being reused,
-            // since hasCanvas(name) would keep saying "taken").
+            // Validated BEFORE createCanvas() below - erroring after the
+            // canvas already exists would leave an orphaned, empty,
+            // undamaged entry registered under `name` forever (hasCanvas()
+            // would keep saying "taken", with no root ever shown).
             std::optional<EEdge> exclusiveEdge;
             if (!exclusiveStr.empty()) {
                 exclusiveEdge = parseEdge(L, exclusiveStr);
@@ -1146,10 +1006,8 @@ namespace HyprLUI::Lua {
             canvas->setFixedSize(fw, fh);
             canvas->setAnchor(anchor, std::string{monitor->name()}, {x, y});
 
-            // setExclusive() must happen BEFORE recomputeAnchorPosition()
-            // below, so this window positions itself correctly (excluding
-            // only its own contribution, see CCanvas::setExclusive()'s
-            // doc comment) from the very first frame.
+            // Must happen BEFORE recomputeAnchorPosition() below, so this
+            // window positions itself correctly from the very first frame.
             if (exclusiveEdge)
                 canvas->setExclusive(*exclusiveEdge);
 
@@ -1163,11 +1021,9 @@ namespace HyprLUI::Lua {
                 const EEdge       edge        = *exclusiveEdge;
                 const std::string monitorName = std::string{monitor->name()};
 
-                // Reserved amount tracks this window's LIVE size (e.g. if
-                // its content is Bind()ed and grows/shrinks) - registered
-                // via the same generic "size actually changed" hook
-                // addBinding() uses for reactivity, keeping CCanvas itself
-                // unaware exclusive zones even exist.
+                // Tracks this window's LIVE size (e.g. Bind()ed content
+                // growing/shrinking) - CCanvas itself stays unaware
+                // exclusive zones even exist.
                 auto sizeAlong = [edge](const Vector2D& sz) -> double { return (edge == EEdge::Top || edge == EEdge::Bottom) ? sz.y : sz.x; };
 
                 CReservedAreaComposer::get().setContribution(name, monitorName, edge, sizeAlong(canvas->size()));
@@ -1184,8 +1040,7 @@ namespace HyprLUI::Lua {
         int luaRemoveCanvas(lua_State* L) {
             const std::string name = luaL_checkstring(L, 1);
             CUIManager::get().removeCanvas(name);
-            // No-op if `name` never had an exclusive contribution.
-            CReservedAreaComposer::get().removeContribution(name);
+            CReservedAreaComposer::get().removeContribution(name); // no-op if `name` never had one
             return 0;
         }
 
@@ -1198,30 +1053,20 @@ namespace HyprLUI::Lua {
                 return luaL_error(L, "hyprlui.set_canvas_visible: no window named '%s'", name.c_str());
 
             // A hidden Input can't visibly be typed into, so it shouldn't
-            // silently keep HyprLUI's keyboard focus either - matches the
-            // exclusive-zone precedent below ("hidden reserves nothing").
-            // No-op if this canvas isn't the one holding focus.
+            // silently keep keyboard focus either.
             if (!visible && CUIManager::get().isCanvasFocused(name))
                 CUIManager::get().blurFocusedInput();
 
             canvas->setVisible(visible);
             canvas->damage();
-            // A hidden exclusive window reserves nothing (matches eww) -
-            // no-op if `name` never had an exclusive contribution.
-            CReservedAreaComposer::get().setActive(name, visible);
+            CReservedAreaComposer::get().setActive(name, visible); // a hidden exclusive window reserves nothing
             return 0;
         }
 
         // Repositions an already-created window to an explicit global
         // position - clears any anchor first (an explicit position and an
-        // anchor are mutually exclusive, see CCanvas::clearAnchor()'s doc
-        // comment), so calling this on an anchored window makes it stop
-        // tracking that anchor from here on. Prerequisite groundwork for
-        // animatable window position (DESIGN.md's deferred "move" note,
-        // and eventually Hyprland-style animation `style`s like "slide") -
-        // this itself is instant, same as every other mutation before it
-        // got an optional animated path (see set_widget_visible()'s own
-        // history, Phase 2 -> Phase 13).
+        // anchor are mutually exclusive), so calling this on an anchored
+        // window makes it stop tracking that anchor from here on.
         int luaSetCanvasPosition(lua_State* L) {
             const std::string name = luaL_checkstring(L, 1);
             const double      x    = luaL_checknumber(L, 2);
@@ -1235,14 +1080,9 @@ namespace HyprLUI::Lua {
             return 0;
         }
 
-        // Resizes an already-created window - `w`/`h` pin that axis
-        // exactly like hyprlui.window()'s own w/h fields do (see
-        // CWidget::setFixedSize()'s doc comment); pass nil for either to
-        // let THAT axis size-to-content again instead. No explicit
-        // damage() call needed here - CCanvas::render()'s existing
-        // content-size sync (which already runs every frame regardless of
-        // WHY m_fixedW/H changed) picks this up and damages the old/new
-        // footprint correctly on the very next frame.
+        // Resizes an already-created window; nil for either axis lets it
+        // size-to-content again. No explicit damage() call needed -
+        // CCanvas::render()'s content-size sync picks this up next frame.
         int luaSetCanvasSize(lua_State* L) {
             const std::string name = luaL_checkstring(L, 1);
 
@@ -1294,12 +1134,8 @@ namespace HyprLUI::Lua {
             if (!widget)
                 return luaL_error(L, "hyprlui.set_widget_visible: no widget '%s' in window '%s'", id.c_str(), canvasName.c_str());
 
-            // Same reasoning as set_canvas_visible() - hiding a widget
-            // that happens to be the focused Input blurs it first, rather
-            // than leaving it invisible yet still silently holding
-            // HyprLUI's keyboard focus. Same for hover (Phase 10) - a
-            // hidden widget shouldn't silently keep firing onHoverEnd-
-            // pending state either.
+            // Hiding a focused/hovered widget blurs/un-hovers it first,
+            // rather than leaving it invisible but still silently focused.
             if (!visible) {
                 if (CUIManager::get().isFocused(canvasName, id))
                     CUIManager::get().blurFocusedInput();
@@ -1325,11 +1161,8 @@ namespace HyprLUI::Lua {
             if (!widget)
                 return luaL_error(L, "hyprlui.set_widget_disabled: no widget '%s' in window '%s'", id.c_str(), canvasName.c_str());
 
-            // A widget that becomes disabled while focused/hovered can't
-            // stay that way - hitTest() excluding it from here on means
-            // it could never have BECOME focused/hovered in the first
-            // place, so drop that state now rather than leave it stale
-            // (same "keep C++ state honest" precedent as set_widget_visible).
+            // A widget that becomes disabled can't stay focused/hovered -
+            // hitTest() excludes it from here on, so drop that state now.
             if (disabled) {
                 if (CUIManager::get().isFocused(canvasName, id))
                     CUIManager::get().blurFocusedInput();
@@ -1342,21 +1175,10 @@ namespace HyprLUI::Lua {
             return 0;
         }
 
-        // Resizes a single widget within an existing window - `w`/`h` pin
-        // that axis exactly like the widget's own constructor-time w/h
-        // override does (see CWidget::setFixedSize()'s doc comment); pass
-        // nil for either to let THAT axis size-to-content again instead.
-        // Runtime mutator for the same mechanism every fixed-size-capable
-        // widget (containers, Image) already exposes at construction -
-        // this is just the ability to change it afterward, mirroring
-        // hyprlui.set_canvas_size() one level down. A single explicit
-        // canvas->damage() call covers it regardless of whether this
-        // widget's resize changes the WHOLE window's own measured size or
-        // not: if it doesn't, the resized widget still lives within the
-        // window's existing box, already covered; if it does,
-        // CCanvas::render()'s own content-size sync picks up the wider
-        // change and damages the new region too, same as any other
-        // widget mutation that happens to grow/shrink the window.
+        // Resizes a single widget within an existing window; nil for
+        // either axis lets it size-to-content again - the same mechanism
+        // every fixed-size-capable widget already exposes at construction,
+        // one level down from hyprlui.set_canvas_size().
         int luaSetWidgetSize(lua_State* L) {
             const std::string canvasName = luaL_checkstring(L, 1);
             const std::string id         = luaL_checkstring(L, 2);
@@ -1479,9 +1301,8 @@ namespace HyprLUI::Lua {
             if (!canvas || !canvas->root())
                 return luaL_error(L, "hyprlui.remove_widget: no window named '%s'", canvasName.c_str());
 
-            // Blur BEFORE the widget is actually torn down below, if it's
-            // the one currently holding HyprLUI's keyboard focus - same
-            // reasoning as CUIManager::removeCanvas()'s own check.
+            // Blur BEFORE the widget is actually torn down below, if it
+            // currently holds keyboard focus.
             if (CUIManager::get().isFocused(canvasName, id))
                 CUIManager::get().blurFocusedInput();
 
@@ -1491,13 +1312,10 @@ namespace HyprLUI::Lua {
                 return 0;
             }
 
-            // Phase 13: animates this widget out first (if "out" is
-            // enabled) and only actually erases it from the tree once
-            // that finishes - immediately, same as before Phase 13, if
-            // it isn't. `canvas` (a PCanvas, shared ownership) is
-            // captured by the deferred callback so the canvas itself
-            // can't have been destroyed out from under it in the
-            // meantime.
+            // Animates the widget out first (if "out" is enabled) and only
+            // erases it from the tree once that finishes; immediate
+            // otherwise. `canvas` (shared ownership) is captured so it
+            // can't be destroyed out from under the deferred callback.
             widget->animateOutThenRemove([canvas, id]() {
                 if (canvas->root())
                     canvas->root()->removeChild(id);
@@ -1534,12 +1352,11 @@ namespace HyprLUI::Lua {
             return 0;
         }
 
-        // Phase 11 (DESIGN.md) - reads a number/string/boolean argument at
-        // `idx` for hyprlui.persistent()/its wrapper's :set(). Uses
-        // lua_type() (exact tag), NOT lua_isnumber()/lua_isstring() -
-        // those two are coercion-aware in the Lua C API (a numeric-
-        // looking string like "123" satisfies lua_isnumber() too), which
-        // would silently misclassify a string default/value as a number.
+        // Reads a number/string/boolean argument at `idx` for
+        // hyprlui.persistent()/its wrapper's :set(). Uses lua_type()
+        // (exact tag), NOT lua_isnumber()/lua_isstring() - those are
+        // coercion-aware (a numeric-looking string like "123" satisfies
+        // lua_isnumber() too), which would misclassify a string value.
         PersistentValue readPersistentValueArg(lua_State* L, int idx, const char* fnName) {
             switch (lua_type(L, idx)) {
                 case LUA_TBOOLEAN: return static_cast<bool>(lua_toboolean(L, idx));
@@ -1563,11 +1380,9 @@ namespace HyprLUI::Lua {
                 val);
         }
 
-        // Both `key` upvalues below are set via lua_pushcclosure() at the
-        // table-construction site in luaPersistent() - `store:get()`/
-        // `store:set(v)`'s Lua `:` sugar passes `store` itself as arg 1,
-        // which these ignore entirely (the actual key lives in the
-        // closure's upvalue, not in any argument).
+        // `key` is set via lua_pushcclosure() at the table-construction
+        // site in luaPersistent() - `store:get()`/`:set(v)`'s Lua `:`
+        // sugar passes `store` as arg 1, which these ignore entirely.
         int luaPersistentGet(lua_State* L) {
             const std::string key = lua_tostring(L, lua_upvalueindex(1));
             pushPersistentValue(L, CPersistenceStore::get().getRaw(key));
@@ -1584,7 +1399,7 @@ namespace HyprLUI::Lua {
         int luaPersistent(lua_State* L) {
             const std::string key = luaL_checkstring(L, 1);
             const auto        def = readPersistentValueArg(L, 2, "hyprlui.persistent");
-            CPersistenceStore::get().getOrInit(key, def); // seeds it if absent, warns (not errors) on a stored-type mismatch otherwise
+            CPersistenceStore::get().getOrInit(key, def); // seeds it if absent, warns (doesn't error) on a stored-type mismatch
 
             lua_newtable(L);
             const int tblIdx = lua_gettop(L);
@@ -1600,11 +1415,9 @@ namespace HyprLUI::Lua {
             return 1;
         }
 
-        // Phase 12 (DESIGN.md) - see NativeServices.hpp for the full
-        // design rationale (why this polls instead of using
-        // CEventLoopManager::doOnReadable(), why no exit code, etc.).
-        // Both of these just parse arguments and delegate - the actual
-        // spawn/socket/poll machinery lives in CNativeServices.
+        // Parses arguments and delegates - the actual spawn/poll machinery
+        // lives in CNativeServices (see its own header for why it polls
+        // instead of CEventLoopManager::doOnReadable()).
         int luaRunCmd(lua_State* L) {
             const std::string cmd = luaL_checkstring(L, 1);
             if (cmd.empty())
@@ -1627,19 +1440,13 @@ namespace HyprLUI::Lua {
             return 0;
         }
 
-        // Phase 13 (DESIGN.md) - hyprlui.animation({leaf="in"|"out",
-        // enabled=true, speed, bezier, style}). Deliberately only "in"/
-        // "out" - not hooked into Hyprland's own animation tree at all
-        // (verified: no public API to register a new leaf node there - see
-        // CWidgetAnimations' doc comment in Widget.hpp), so this is a
-        // self-contained, separate config surface, shaped to LOOK like
-        // hl.animation()'s own table call for familiarity, but scoped to
-        // exactly the two leaves HyprLUI actually supports. `speed` is in
-        // deciseconds, same unit as hl.animation(). `style` (Phase 16
-        // follow-up) is the SAME field/syntax animationIn/animationOut
-        // accept per-widget (see optStyleField()'s own doc comment) -
-        // this is the GLOBAL default every widget/window uses unless it
-        // sets its own animationIn/animationOut override.
+        // hyprlui.animation({leaf="in"|"out", enabled=true, speed, bezier,
+        // style}) - the GLOBAL default every widget/window uses unless it
+        // sets its own animationIn/animationOut override. Shaped to look
+        // like hl.animation()'s own table call, but self-contained -
+        // HyprLUI isn't hooked into Hyprland's own animation tree (no
+        // public API to register a new leaf node there). `speed` is in
+        // deciseconds, same unit as hl.animation().
         int luaAnimation(lua_State* L) {
             luaL_checktype(L, 1, LUA_TTABLE);
 

@@ -28,10 +28,9 @@ namespace HyprLUI {
         }
 
         // Unions `b` into `bounds` in place - `bounds` is always assumed
-        // meaningful (callers seed it from the widget's own box first,
-        // never from a genuinely empty state), `b` may be a zero-size
-        // no-op (e.g. drawLabel() on empty text) which this correctly
-        // ignores rather than collapsing `bounds` toward (0,0).
+        // meaningful already, `b` may be a zero-size no-op (e.g.
+        // drawLabel() on empty text), which this ignores rather than
+        // collapsing `bounds` toward (0,0).
         void expandBounds(CBox& bounds, const CBox& b) {
             if (b.size().x <= 0 && b.size().y <= 0)
                 return;
@@ -46,16 +45,10 @@ namespace HyprLUI {
         // widget nor an ancestor set `debugFontSize`.
         constexpr int DEFAULT_FONT_SIZE = 10;
 
-        // Rasterizes and immediately draws a small text label - NOT
-        // cached (unlike CTextNode's own texture cache, see its doc
-        // comment on why that caching exists). Re-rasterizing a handful
-        // of tiny debug labels every frame is a deliberate, accepted
-        // tradeoff for a dev-time-only, opt-in tool - not an oversight;
-        // see DESIGN.md's debug-overlay notes.
-        // Returns the box actually drawn into (zero-size if `text` was
-        // empty or rasterizing failed, which expandBounds() above treats
-        // as a no-op) - see drawDebugOverlay()'s own doc comment for why
-        // callers need this back rather than just drawing and forgetting.
+        // Rasterizes and immediately draws a small text label - not
+        // cached, unlike CTextNode's own texture cache. Re-rasterizing a
+        // handful of tiny debug labels every frame is an accepted
+        // tradeoff for a dev-time-only, opt-in tool.
         CBox drawLabel(const std::string& text, const Vector2D& pos, const CHyprColor& color, int fontSize) {
             if (text.empty())
                 return {pos, {0, 0}};

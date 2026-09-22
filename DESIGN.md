@@ -69,6 +69,16 @@ This proves the render pipeline end-to-end; the pieces below build on it.
   layout-dirty flag, full relayout is cheap at HUD scale.
 - Extension model: subclass `CWidget`, implement `render()` (+
   `measureContent()`/`arrangeChildren()` for containers).
+- `CWidget::measureContent()`'s default resets a leaf to its own natural/
+  intrinsic size every frame, not just once - needed so a widget stretched
+  via `fill` self-corrects if whatever grew it (e.g. its parent) later
+  shrinks back; without this it would stay stuck at its stretched size
+  forever, since nothing else ever touches `m_size` again.
+- Computed positions (anchor placement, flex layout) round to whole
+  pixels - Hyprland samples with `GL_LINEAR` unless the destination is an
+  exact 1:1 pixel match, so a fractional position blends two adjacent
+  texels into one, visibly blurring text/images (invisible on a
+  solid-color rect, which is why this is easy to miss in testing).
 
 ### 2. Window
 
@@ -158,9 +168,9 @@ concrete need for it yet.
   for reactivity.
 - `hyprlui.defineComponent(name, {props?, render})` /
   `hyprlui.Component(name, props?, opts?)` for reusable widget templates -
-  see the old Phase 9 history for the full scoping-rules writeup (`render`
-  is a plain Lua closure, no per-instance component state, ids
-  auto-rewritten per instance to avoid collisions).
+  see `docs/api.md` for the full scoping-rules writeup (`render` is a
+  plain Lua closure, no per-instance component state, ids auto-rewritten
+  per instance to avoid collisions).
 
 > **Reminder:** `stubs/hyprlui.meta.lua` (LuaLS annotations for
 > `hl.plugin.hyprlui.*`) is hand-maintained, not generated - Hyprland's own

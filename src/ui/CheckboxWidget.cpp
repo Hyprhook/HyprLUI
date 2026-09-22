@@ -22,9 +22,7 @@ namespace HyprLUI {
             return;
 
         // Inner filled square inset 25% on each side (50% of the outer
-        // box's own size, centered) - the "checked" indicator. A plain
-        // rect rather than a checkmark glyph, see this class's own doc
-        // comment for why.
+        // box's own size, centered) - the "checked" indicator.
         const CBox box = boxAt(origin, scale);
         const CBox inner{{box.pos().x + box.size().x * 0.25, box.pos().y + box.size().y * 0.25}, {box.size().x * 0.5, box.size().y * 0.5}};
         CHyprColor checkedFill = m_checkedColor;

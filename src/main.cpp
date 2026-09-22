@@ -47,10 +47,9 @@ namespace {
 
         // A Stack as the root so the background panel (absolutely
         // positioned to fill it) can sit behind the text column, which is
-        // itself a Column so the two lines stack with a gap between them -
-        // exercises both container types the Phase 1 widget tree ships
-        // with. This is exactly what hyprlui.window{...} builds from Lua;
-        // see LuaBridge.hpp for the declarative equivalent.
+        // itself a Column so the two lines stack with a gap between them.
+        // This is exactly what hyprlui.window{...} builds from Lua; see
+        // docs/api.md for the declarative equivalent.
         auto root = std::make_shared<CStackWidget>("root");
         root->addChild(std::make_shared<CRectNode>("panel", Vector2D{0, 0}, Vector2D{440, 120}, CHyprColor{0.05, 0.05, 0.05, 0.75}, 8));
 
@@ -77,40 +76,24 @@ namespace {
     }
 
     // Tears down every canvas/watcher/exclusive-zone contribution HyprLUI
-    // currently owns. Used both at PLUGIN_EXIT (don't leave anything
-    // behind after unload) and right before a config reload re-parses the
-    // Lua script from scratch (see the config.preReload listener in
-    // PLUGIN_INIT below).
-    //
-    // Why the reload case matters: the plugin itself is NOT unloaded/
-    // reloaded when the Lua config reloads - only the script gets re-run.
-    // So without this, HyprLUI's C++-side state would silently outlive
-    // the Lua-side bookkeeping (local variables tracking "is this window
-    // open", etc.) that's supposed to own it - confirmed live: toggling a
-    // window open, then reloading (e.g. fixing an unrelated config eval
-    // error, which forces exactly this), left the window open in C++
-    // while the Lua toggle variable that tracked it reset to "closed" on
-    // re-run - permanently orphaning it, no way to reference it again
-    // through that keybind. Clearing everything right before the fresh
-    // script runs means it starts from the same blank slate the Lua
-    // script's own reset locals already assume, matching how Hyprland's
-    // own config-driven state (binds, window rules) already behaves
-    // across a reload.
+    // currently owns. Used both at PLUGIN_EXIT and right before a config
+    // reload re-parses the Lua script from scratch - the plugin itself is
+    // NOT unloaded/reloaded on a config reload, only the script re-runs,
+    // so without this HyprLUI's C++ state would silently outlive the
+    // fresh script's own reset local variables. See DESIGN.md's Current
+    // state for the fuller picture and the known bluntness of this
+    // mitigation.
     void resetAllState() {
         HyprLUI::CWatcherManager::get().clear();
         HyprLUI::CUIManager::get().clear();
         HyprLUI::CReservedAreaComposer::get().clear();
-        // hyprlui.defineComponent() calls are top-level config code too,
-        // re-run in full on every reload - without this, the fresh
-        // script's re-registration would immediately hit "already
-        // registered" against the stale entry from before the reload.
+        // defineComponent() calls are top-level config code too, re-run
+        // on every reload - without this, re-registration would hit
+        // "already registered" against the stale entry.
         HyprLUI::CComponentRegistry::get().clear();
-        // Phase 12: run_cmd()/open_socket() are ephemeral, script-scoped
-        // resources - the OPPOSITE lifecycle from CPersistenceStore (see
-        // that class's own header comment) - so unlike it, this DOES
-        // belong in resetAllState(): a reload gets a fresh script, and
-        // any command/socket the old one was waiting on is meaningless
-        // to keep around.
+        // Ephemeral, script-scoped resources - unlike CPersistenceStore,
+        // this DOES belong here: a reload gets a fresh script, and
+        // anything the old one was waiting on is meaningless to keep.
         HyprLUI::CNativeServices::get().clear();
     }
 
@@ -148,10 +131,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     HyprLUI::InputHook::registerHooks(Global::PHANDLE);
     HyprLUI::CReservedAreaComposer::get().registerHooks(Global::PHANDLE);
 
-    // See resetAllState()'s doc comment - config.preReload fires as the
-    // very first thing inside CConfigManager::reload(), strictly before
-    // any re-parsing begins (ConfigManager.cpp:647-648), so clearing here
-    // can never wipe out anything the fresh script is about to create.
+    // config.preReload fires as the very first thing inside a reload,
+    // strictly before any re-parsing begins, so clearing here can never
+    // wipe out anything the fresh script is about to create.
     static auto preReload = Event::bus()->m_events.config.preReload.listen([]() { resetAllState(); });
 
     // NOTE: addDispatcher/addDispatcherV2 are stubbed out (always return
@@ -162,8 +144,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     // hl.plugin.<namespace>.<name> in the Lua config's global state.
     HyprlandAPI::addLuaFunction(Global::PHANDLE, "hyprlui", "demo", &luaToggleDemo);
 
-    // The real public API: hl.plugin.hyprlui.create_canvas/add_rect/add_text/...
-    // See src/ui/LuaBridge.hpp for the full list and hyprland.lua usage.
+    // The real public API - see docs/api.md for the full reference.
     HyprLUI::Lua::registerFunctions(Global::PHANDLE);
 
     const CHyprColor goodColor(0.0f, 1.0f, 0.0f, 1.0f);
@@ -176,10 +157,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
 APICALL EXPORT void PLUGIN_EXIT() {
     resetAllState();
-    // Deliberately NOT part of resetAllState() (config.preReload also
-    // calls that, and surviving exactly that reload is the entire reason
-    // CPersistenceStore exists - see its own header comment). Only a
-    // REAL unload clears it.
+    // Deliberately NOT part of resetAllState() - surviving a reload is
+    // the entire reason CPersistenceStore exists. Only a real unload
+    // clears it.
     HyprLUI::CPersistenceStore::get().clear();
     HyprLUI::CReservedAreaComposer::get().unregisterHooks(Global::PHANDLE);
     HyprLUI::InputHook::unregisterHooks(Global::PHANDLE);

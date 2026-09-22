@@ -4,8 +4,7 @@
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
 
-// Same extern "C" requirement as LuaBridge.cpp - see the comment there for
-// why (this Lua build's headers don't self-guard with extern "C").
+// This Lua build's headers don't self-guard with extern "C".
 extern "C" {
 #include <lua.h>
 #include <lauxlib.h>
@@ -26,13 +25,9 @@ namespace HyprLUI {
 
     namespace {
         // Calls the Lua function at LUA_REGISTRYINDEX ref `fnRef` with no
-        // arguments and coerces its single return value to a string the
-        // same way Lua's own tostring()/`..` would (luaL_tolstring handles
-        // numbers/booleans/strings sensibly, and honors a __tostring
-        // metamethod if the return value has one). Errors are caught and
-        // logged, returning `fallback` instead of propagating - see
-        // Watcher.hpp's doc comment on notify() for why this can't rely on
-        // a caller-side pcall.
+        // arguments and coerces its return value to a string the same way
+        // Lua's own tostring()/`..` would. Errors are caught and logged,
+        // returning `fallback` instead of propagating.
         std::string callWatcherFn(lua_State* L, int fnRef, const std::string& fallback) {
             lua_rawgeti(L, LUA_REGISTRYINDEX, fnRef);
 

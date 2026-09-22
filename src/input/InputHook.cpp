@@ -79,42 +79,28 @@ namespace HyprLUI::InputHook {
             g_pressed.reset();
         }
 
-        // Hover tracking + cursor feedback (Phase 10, DESIGN.md). Purely
-        // observational - `info.cancelled` is never set here - so windows
-        // underneath a HyprLUI overlay still get their own normal hover/
-        // motion behavior; only clicks and (opted-into) scroll are ever
-        // actually swallowed.
+        // Hover tracking + cursor feedback. Purely observational -
+        // `info.cancelled` is never set here - so windows underneath a
+        // HyprLUI overlay still get their own normal hover/motion
+        // behavior; only clicks and (opted-into) scroll are swallowed.
         void onMouseMove(Vector2D, Event::SCallbackInfo& info) {
             const auto pt  = g_pInputManager->getMouseCoordsInternal();
             const auto hit = HyprLUI::CUIManager::get().hitTestWidget(pt);
             HyprLUI::CUIManager::get().updateHover(hit);
 
-            // Pointer::Cursor::overrideController (a header-defined
-            // `inline` global, not an `extern`-declared pointer like every
-            // other Hyprland singleton this project reaches into so far -
-            // verified via a real build + the same nm -D undefined-symbol
-            // check used everywhere else, see DESIGN.md Phase 10) is
             // Hyprland's own priority-grouped cursor-override mechanism -
-            // CInputManager itself already listens for changes on it and
-            // applies them via setCursorFromName(), so this is additive,
-            // not fighting Hyprland's own cursor state. CURSOR_OVERRIDE_
-            // UNKNOWN is deliberately the LOWEST priority group - a real
-            // window-edge-resize or drag-and-drop cursor should win over
-            // a HUD hover indicator, not get fought with it. setOverride()
-            // with an unchanged name is a cheap no-op internally (the
-            // class's own change-detection, not re-implemented here).
+            // additive, not fighting Hyprland's own cursor state.
+            // CURSOR_OVERRIDE_UNKNOWN is deliberately the LOWEST priority
+            // group, so a real window-edge-resize or drag cursor wins
+            // over a HUD hover indicator.
             if (!hit.empty())
                 Pointer::Cursor::overrideController->setOverride("pointer", Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
             else
                 Pointer::Cursor::overrideController->unsetOverride(Pointer::Cursor::CURSOR_OVERRIDE_UNKNOWN);
         }
 
-        // Scroll (Phase 10) - stays completely inert (event left
-        // uncancelled, passes through to whatever real window is behind
-        // it) unless hit-testing lands on a widget that actually has an
-        // onScroll handler set, matching the "swallow only what's opted
-        // into" philosophy already established for Phase 6's keybind-
-        // priority default.
+        // Stays completely inert unless hit-testing lands on a widget
+        // with an onScroll handler set - swallow only what's opted into.
         void onMouseAxis(IPointer::SAxisEvent e, Event::SCallbackInfo& info) {
             const auto pt  = g_pInputManager->getMouseCoordsInternal();
             const auto hit = HyprLUI::CUIManager::get().hitTestWidget(pt);
@@ -128,12 +114,9 @@ namespace HyprLUI::InputHook {
 
         // Whether `sym` is a bare modifier keysym (Shift/Ctrl/Alt/Super/
         // CapsLock/NumLock) rather than something an Input could ever
-        // meaningfully "type". Deliberately the exact same set Hyprland's
-        // own keybind engine treats as a modifier - `modifierFromXkb()`
-        // (keybinds/Manager.cpp:171, file-local `static`, so reimplemented
-        // here rather than exposed) - see onKeyboardKey()'s doc comment
-        // below for why matching that set exactly (not a superset/subset)
-        // matters, not just "seemed reasonable".
+        // meaningfully "type" - deliberately the same set Hyprland's own
+        // keybind engine treats as a modifier (its `modifierFromXkb()` is
+        // file-local, so reimplemented here rather than exposed).
         bool isModifierKeysym(xkb_keysym_t sym) {
             switch (sym) {
                 case XKB_KEY_Super_L:
@@ -150,22 +133,17 @@ namespace HyprLUI::InputHook {
             }
         }
 
-        // Raw keysym forwarding for the focused Input, if any - see
-        // InputWidget.hpp for why this is deliberately not a text field.
-        // SKeyEvent only carries an evdev keycode (there's no
-        // "which keyboard" info on the event itself, see EventBus.hpp),
-        // so the keysym is resolved against whichever keyboard the seat
-        // currently considers active - the only sensible source, and the
-        // same one Hyprland's own keybind resolution uses.
+        // Raw keysym forwarding for the focused Input, if any. SKeyEvent
+        // only carries an evdev keycode, no "which keyboard" info, so the
+        // keysym is resolved against whichever keyboard the seat
+        // currently considers active - the same one Hyprland's own
+        // keybind resolution uses.
         void onKeyboardKey(IKeyboard::SKeyEvent e, Event::SCallbackInfo& info) {
             auto keyboard = g_pSeatManager->m_keyboard.lock();
             if (!keyboard || !keyboard->m_xkbState)
                 return;
 
-            // xkbcommon keycodes are libinput/evdev + 8 - see
-            // LuaEventHandler.cpp's own "input.keyboard.key" dispatch for
-            // the same offset on the same event.
-            const uint32_t xkbCode = e.keycode + 8;
+            const uint32_t xkbCode = e.keycode + 8; // xkbcommon keycodes are libinput/evdev + 8
 
             // Live, modifier-aware keysym - what onKey/the built-in text
             // capture actually want (Shift+a should type 'A', etc.).
@@ -173,88 +151,39 @@ namespace HyprLUI::InputHook {
             const bool         pressed = e.state == WL_KEYBOARD_KEY_STATE_PRESSED;
 
             // A SEPARATE, modifier-INDEPENDENT keysym for the keybind-
-            // conflict query below only. Hyprland's own bind resolution
-            // (Manager.cpp:206-207) resolves a bind's trigger key against
-            // `keyboard->m_xkbSymState` (or a keybind-manager-private
-            // `m_xkbTranslationState` when `m_resolveBindsBySym` is set -
-            // not reachable from a plugin, but `m_xkbSymState` represents
-            // the same "layout-aware, no momentary modifiers" base symbol
-            // and matches for every ordinary case) - NOT the live per-
-            // press state - so a bind named "U" matches regardless of
-            // whether Shift happens to be held, with the modifier
-            // requirement checked separately via the bind's own modmask.
-            // `m_xkbSymState` only ever tracks group/layout changes
-            // (`IKeyboard::updateXkbStateWithKey()` calls
-            // `xkb_state_update_mask(m_xkbSymState, ..., group)` only,
-            // never `xkb_state_update_key()` on it - confirmed by reading
-            // IKeyboard.cpp) - never momentary Shift/Ctrl/Alt, matching
-            // that intent exactly. **Found live, third distinct bug in
-            // this exclusion logic**: using the LIVE keysym here meant a
-            // bind like "ALT + SHIFT + U" was NEVER recognized as a
-            // conflict at all - its registered trigger keysym is
-            // unshifted 'u', but the live keysym while Shift is actually
-            // held resolves to uppercase 'U', so they never compared
-            // equal. Harmless while nothing was focused (Hyprland's own,
-            // correctly-resolved matcher fired it regardless of what this
-            // plugin thought), but once an Input *was* focused, this
-            // plugin never excluded the key and swallowed it instead -
-            // deterministically, every time, not a timing race like the
-            // previous two fixes. A single-modifier bind like "ALT + T"
-            // was unaffected only because it has no Shift component to
-            // desync in the first place.
+            // conflict query below only - Hyprland's own bind resolution
+            // matches a trigger key like "U" regardless of whether Shift
+            // happens to be held (the modifier requirement is checked
+            // separately via the bind's own modmask). Using the LIVE
+            // keysym here instead would make a bind like "ALT + SHIFT + U"
+            // never register as a conflict (its trigger is unshifted 'u',
+            // but the live keysym while Shift is held resolves to 'U'),
+            // silently letting a focused Input swallow that keybind.
             const xkb_keysym_t bindKeysym = xkb_state_key_get_one_sym(keyboard->m_xkbSymState, xkbCode);
 
             // A key that currently triggers a real Hyprland keybind is
-            // never forwarded to a focused Input at all - not "forwarded
-            // but not swallowed", genuinely never reaches onKey - so the
-            // user's keybinds behave exactly as if HyprLUI didn't exist,
-            // regardless of what happens to be focused. Checked via a
-            // read-only query with no side effect (does NOT invoke the
-            // bind), the same call Hyprland's own global-shortcuts-portal
-            // conflict check uses (protocols/Hotkey.cpp). Only considers
-            // global-scope binds (CRegistry::findShortcutConflict()
-            // explicitly skips binds with a non-empty submap) - a submap-
-            // only bind can still reach a focused Input; no read-only way
-            // to ask "is this bound in the *current* submap" was found.
+            // never forwarded to a focused Input at all, so the user's
+            // keybinds behave as if HyprLUI didn't exist. Read-only query,
+            // no side effect. Only considers global-scope binds - a
+            // submap-only bind can still reach a focused Input.
             //
             // A bare modifier keysym (Alt_L, Shift_L, ...) is excluded
-            // unconditionally for a different, more important reason:
-            // `CKeybindManager::onKeyEvent()` (Manager.cpp:184) is called
-            // for EVERY key event, including standalone modifier presses/
-            // releases, and does its own essential bookkeeping there
-            // (`m_inputState.press()`/`.release()`, feeding `heldKeys()`)
-            // that later keybind matching depends on - REGARDLESS of
-            // whether that particular modifier press happens to complete
-            // a bind on its own. Cancelling one of these events makes
-            // `CInputManager::onKeyboardKey()` (InputManager.cpp:1702)
-            // return before ever calling `onKeyEvent()` for it, so
-            // Hyprland's own held-key state silently desyncs from what's
-            // physically held. **Found live**: once an Input was focused
-            // via a mouse click, keyboard-driven chords (including this
-            // plugin's own focus/blur test binds) became unreliable -
-            // needing repeated presses, or never firing - because every
-            // Alt/Shift press+release from that point on was being eaten
-            // here instead of reaching Hyprland's bookkeeping. There's
-            // also nothing an Input could do with a bare modifier anyway
-            // (nothing to type), so excluding it costs nothing.
+            // unconditionally too, for a different reason: Hyprland's own
+            // keybind manager needs to see every modifier press/release
+            // for its held-key bookkeeping, regardless of whether that
+            // press completes a bind on its own - swallowing one here
+            // desyncs Hyprland's held-key state from what's physically
+            // held, breaking later chord matching for as long as
+            // something stays focused. Costs nothing UX-wise - there's
+            // nothing an Input could do with a bare modifier anyway.
             //
-            // Whichever of those two checks decides a PRESS, the matching
-            // RELEASE must reuse the exact same decision rather than
-            // re-running both checks against the *current* (release-time)
-            // state - tracked here per raw evdev keycode. Necessary
-            // because nobody releases a chord atomically: if e.g. Shift
-            // gets released fractionally before the trigger key, the
-            // trigger's own release arrives with a modifier mask that no
-            // longer matches the bind, so a stateless re-check would
-            // misclassify *that* release as "not a keybind" and swallow
-            // it once something's focused - corrupting `m_inputState`'s
-            // press/release symmetry the exact same way an eaten modifier
-            // event does (**found live**, immediately after the modifier
-            // fix above: focusing via keybind worked once, then every
-            // subsequent chord involving that same Input broke again).
-            // Hyprland's own `onKeyEvent()` sidesteps this identical
-            // problem by remembering `modifiersAtPress` per key instead of
-            // re-deriving it at release - this mirrors that.
+            // Whichever check decides a PRESS, the matching RELEASE must
+            // reuse that same decision rather than re-running both checks
+            // against release-time state - tracked here per raw evdev
+            // keycode. Necessary because chords don't release atomically:
+            // if a modifier releases fractionally before the trigger key,
+            // a stateless re-check at release would see a modifier mask
+            // that no longer matches the bind and misclassify it.
             bool excluded;
             if (pressed) {
                 excluded = isModifierKeysym(keysym) || Keybinds::mgr()->findConflictingBind(bindKeysym, keyboard->getModifiers());
