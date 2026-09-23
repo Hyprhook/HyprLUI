@@ -335,10 +335,17 @@ any still-in-flight command/socket is torn down on the next config reload.
 
 ## Window construction and mutation
 
-- **`window{ name, x = 0, y = 0, w, h, zorder = "overlay"|"background", anchor, monitor, exclusive, <exactly one root widget> }`**
+- **`window{ name?, x = 0, y = 0, w, h, zorder = "overlay"|"background", anchor, monitor, exclusive, <exactly one root widget> }`**
   - opens a new window with the given widget tree as its root. If `w`/`h`
   are omitted the window sizes itself to the root's measured content.
-  Errors if `name` is already in use.
+  Errors if `name` is already in use. `name` is optional - if omitted, one
+  is auto-generated (`"__window0"`, `"__window1"`, ...), mirroring how a
+  widget's own `id` auto-generates when omitted. **Returns the spec table
+  back**, with `name` set to whatever was actually used (given or
+  auto-generated) - grab it off the return value to reference this window
+  later (`remove_canvas`, `set_canvas_visible`, etc.) without having to
+  name it yourself: `local win = hyprlui.window{ ... }; ...
+  hyprlui.remove_canvas(win.name)`.
   - Without `anchor`: `x`/`y` are a raw global (compositor-space)
     position.
   - With `anchor` (one of `top-left`/`top`/`top-right`/`left`/`center`/

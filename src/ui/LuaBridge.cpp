@@ -160,7 +160,14 @@ namespace HyprLUI::Lua {
         int luaWindow(lua_State* L) {
             luaL_checktype(L, 1, LUA_TTABLE);
 
-            const auto name         = requireFieldString(L, 1, "name", "hyprlui.window");
+            // Auto-generated if omitted, like a widget's own id.
+            static int s_nextWindowId = 0;
+            auto       name           = optFieldString(L, 1, "name", "");
+            if (name.empty())
+                name = "__window" + std::to_string(s_nextWindowId++);
+            lua_pushstring(L, name.c_str());
+            lua_setfield(L, 1, "name");
+
             const auto x            = fieldNumber(L, 1, "x", 0);
             const auto y            = fieldNumber(L, 1, "y", 0);
             const auto fw           = optFixedField(L, 1, "w");
@@ -220,7 +227,8 @@ namespace HyprLUI::Lua {
                 root->primeHidden();
                 root->setVisible(true);
                 canvas->damage();
-                return 0;
+                lua_pushvalue(L, 1);
+                return 1;
             }
 
             // With `anchor`, x/y are reinterpreted as an offset from the
@@ -283,7 +291,8 @@ namespace HyprLUI::Lua {
             root->primeHidden();
             root->setVisible(true);
             canvas->damage();
-            return 0;
+            lua_pushvalue(L, 1);
+            return 1;
         }
 
         int luaRemoveCanvas(lua_State* L) {

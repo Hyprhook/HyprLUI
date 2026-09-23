@@ -31,11 +31,8 @@ namespace HyprLUI {
 
         const float opacity = composedOpacity(parentOpacity);
         renderFill(origin, scale, opacity);
-        // See CButtonWidget::render()'s comment - pass parentOpacity, not
-        // an already-composed value, so m_opacity isn't applied to
-        // children twice.
-        CWidget::render(origin, parentOpacity, scale); // draws children (the auto label, plus any Lua-added ones) on top
-        renderBorder(origin, scale, opacity);          // drawn last, so it's never hidden under a child that happens to reach the edge
+        CWidget::render(origin, parentOpacity, scale);
+        renderBorder(origin, scale, opacity);
     }
 
     void CInputWidget::arrangeChildren() {

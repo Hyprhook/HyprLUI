@@ -37,22 +37,12 @@ namespace HyprLUI {
         }
 
       protected:
-        // Split out of render() so a subclass that draws its own content
-        // BETWEEN the fill and the border (Image's texture, a future
-        // widget) can call these directly instead of render(): fill,
-        // then its own content, then renderBorder() last - so the border
-        // always ends up on top, never hidden underneath opaque content.
-        // Uses effectiveFillColor(), not the raw m_color, so hoverColor/
-        // disabledColor swap correctly for every subclass (and for a
-        // plain Box made interactive via onClick/onScroll) - one place
-        // for that logic instead of each subclass repeating it.
-        void       renderFill(const Vector2D& origin, const Vector2D& scale, float opacity);
-        void       renderBorder(const Vector2D& origin, const Vector2D& scale, float opacity);
+        // Split so a subclass can draw content between fill and border.
+        void                       renderFill(const Vector2D& origin, const Vector2D& scale, float opacity);
+        void                       renderBorder(const Vector2D& origin, const Vector2D& scale, float opacity);
 
-        CHyprColor m_color;
-        int        m_rounding;
-        // See gfx::drawBorder() for the border-box model this draws
-        // under. Zero-width (the default) draws nothing.
+        CHyprColor                 m_color;
+        int                        m_rounding;
         Config::CGradientValueData m_borderColor;
         int                        m_borderWidth;
     };

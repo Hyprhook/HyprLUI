@@ -278,13 +278,17 @@ needed again.
 Decided in a planning session after this file's phase history was reviewed
 in full. Tracked here going forward instead of as numbered phases.
 
-- [ ] **1. Window naming defaults** - `window{}` auto-generates a `name`
-      when omitted, mirroring the existing widget `id` auto-generation
-      (`__auto0`, `__auto1`, ...). `hyprlui.window()` returns the window's
-      spec table back to the caller, including the resolved name (auto-
-      generated or explicit), so a caller who wants to reference the window
-      later (close it, toggle visibility) can grab the name off the return
-      value with no separate lookup needed.
+- [x] **1. Window naming defaults** - `window{}` auto-generates a `name`
+      (`"__window0"`, `"__window1"`, ... - a function-local static counter
+      in `luaWindow()`, never reset, same "harmless, nothing depends on
+      staying small" reasoning as `CComponentRegistry`'s own instance-id
+      counter) when omitted, mirroring the existing widget `id` auto-
+      generation. `hyprlui.window()` now returns the window's spec table
+      back to the caller (the resolved `name` written onto it either way,
+      given or generated) instead of nothing, so a caller who wants to
+      reference the window later can grab the name off the return value
+      with no separate lookup needed. `docs/api.md` updated. Build
+      verified clean, standing extern-C leak check still at 0.
 - [ ] **2. Box sizing default** - An unsized `Box` (no `w`/`h` given)
       defaults to `0x0` instead of erroring. Rationale: in practice an
       unsized Box is almost always paired with `fill` anyway (the

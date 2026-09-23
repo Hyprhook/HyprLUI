@@ -2,21 +2,11 @@
 //
 // ImageWidget.hpp
 //
-// Loads an image file (PNG/JPG/WEBP/SVG/AVIF/JXL - whatever the installed
-// libhyprgraphics supports) and draws it as a texture, with the inherited
-// CRectNode's flat-color fill drawn behind it (default transparent - a
-// solid `color` behind a transparent PNG, or as a placeholder while/if the
-// image fails to load, e.g. a broken-image indicator). Size-to-content by
-// default; an explicit fixed w/h scales/stretches the image to fill that
-// box - deliberately unlike CTextNode, which never stretches its glyphs
-// (stretching a photo/icon to a requested size is the expected default,
-// matching plain CSS `<img>` sizing).
-//
-// Loading is EAGER (decoded synchronously in the constructor and again on
-// every setImage() call), unlike CTextNode's lazy-on-first-measure()
-// texture cache - a bad path/unsupported format is a real, likely-common
-// config mistake, and eager decoding is what lets LuaBridge.cpp check
-// loaded() and log a warning immediately at window-build time.
+// Loads an image file (PNG/JPG/WEBP/SVG/AVIF/JXL) and draws it as a
+// texture over the inherited CRectNode fill (default transparent).
+// Size-to-content by default; a fixed w/h stretches the image, unlike
+// CTextNode. Decoding is eager/synchronous, in the constructor and on
+// every setImage().
 
 #include "RectNode.hpp"
 #include "../render/gfx.hpp"
@@ -36,12 +26,7 @@ namespace HyprLUI {
         // synchronously - not deferred.
         void setImage(const std::string& path);
 
-        // False if the file was missing/unreadable or failed to decode -
-        // the widget still occupies its position (0x0 size unless a fixed
-        // w/h override was given) and still draws its fill/border, just
-        // no texture. Lets a caller (or LuaBridge.cpp, at construction)
-        // detect and log a failure without this widget type needing to
-        // know Lua/luaL_error exist.
+        // False if the path failed to decode - fill/border still draw, just no texture.
         bool loaded() const {
             return m_texture != nullptr;
         }
