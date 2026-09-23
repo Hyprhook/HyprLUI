@@ -105,9 +105,10 @@ for its own type:
   size-to-content by default unless `w`/`h` are given (stretches to fill,
   unlike `Text`). `color` is an optional solid fill drawn behind the
   texture (default: transparent) - useful as a placeholder/letterbox
-  behind a transparent image or before one loads. A missing file or
-  unsupported format logs a warning and leaves the widget drawing nothing,
-  rather than erroring the whole window out.
+  behind a transparent image or before one loads, or as a visible
+  fallback if it fails to load. A missing file or unsupported format logs
+  a warning and leaves the widget drawing just its fill/border (no
+  texture), rather than erroring the whole window out.
 - **`Divider{ id, x = 0, y = 0, length, thickness = 1, orientation = "horizontal"|"vertical", color }`**
   - a thin separator line, pure sugar over a `Box` with a computed `w`/`h`.
   `length` is the dimension along the divider's own axis.

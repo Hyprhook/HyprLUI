@@ -4,9 +4,10 @@
 //
 // Checked/unchecked only - deliberately not an iOS-style toggle switch, no
 // animated transition. Renders like CButtonWidget (flat-filled outer box,
-// same rounding/hit-testing shape) plus, when checked, a smaller inset
-// filled square drawn on top - a plain rect-based indicator rather than a
-// checkmark glyph, since this toolkit has no icon/glyph font dependency.
+// via the inherited CRectNode, same rounding/hit-testing shape) plus, when
+// checked, a smaller inset filled square drawn on top - a plain rect-based
+// indicator rather than a checkmark glyph, since this toolkit has no
+// icon/glyph font dependency.
 //
 // Click semantics/lifetime are identical to CButtonWidget's - same
 // InputHook.cpp press/release pairing. The one real difference: a
@@ -16,38 +17,22 @@
 // a real checkbox needs a checked/unchecked question answerable without
 // asking Lua, e.g. for get_checkbox_checked().
 
-#include "Widget.hpp"
-
-#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
-#include <hyprland/src/helpers/Color.hpp>
+#include "RectNode.hpp"
 
 #include <functional>
 
 namespace HyprLUI {
 
-    class CCheckboxWidget : public CWidget {
+    class CCheckboxWidget : public CRectNode {
       public:
         CCheckboxWidget(std::string id, const Vector2D& position, const Vector2D& size, CHyprColor color, CHyprColor checkedColor, int rounding = 0, bool checked = false,
                         Config::CGradientValueData borderColor = Config::CGradientValueData{CHyprColor{}}, int borderWidth = 0) :
-            CWidget(std::move(id), position), m_color(color), m_checkedColor(checkedColor), m_rounding(rounding), m_checked(checked), m_borderColor(std::move(borderColor)),
-            m_borderWidth(borderWidth) {
-            m_size = size;
-        }
+            CRectNode(std::move(id), position, size, color, rounding, std::move(borderColor), borderWidth), m_checkedColor(checkedColor), m_checked(checked) {}
 
         void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) override;
 
-        void setColor(const CHyprColor& color) {
-            m_color = color;
-        }
         void setCheckedColor(const CHyprColor& color) {
             m_checkedColor = color;
-        }
-        void setRounding(int rounding) {
-            m_rounding = rounding;
-        }
-        void setBorder(Config::CGradientValueData color, int width) {
-            m_borderColor = std::move(color);
-            m_borderWidth = width;
         }
 
         void setOnChange(std::function<void(bool)> fn) {
@@ -89,13 +74,9 @@ namespace HyprLUI {
         }
 
       private:
-        CHyprColor                 m_color;
-        CHyprColor                 m_checkedColor;
-        int                        m_rounding;
-        bool                       m_checked;
-        Config::CGradientValueData m_borderColor;
-        int                        m_borderWidth;
-        std::function<void(bool)>  m_onChange;
+        CHyprColor                m_checkedColor;
+        bool                      m_checked;
+        std::function<void(bool)> m_onChange;
     };
 
 } // namespace HyprLUI

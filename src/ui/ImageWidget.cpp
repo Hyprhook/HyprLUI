@@ -2,25 +2,28 @@
 
 namespace HyprLUI {
 
-    CImageWidget::CImageWidget(std::string id, const Vector2D& position, std::string path, int rounding, Config::CGradientValueData borderColor, int borderWidth) :
-        CWidget(std::move(id), position), m_path(std::move(path)), m_rounding(rounding), m_borderColor(std::move(borderColor)), m_borderWidth(borderWidth) {
-        reload();
+    CImageWidget::CImageWidget(std::string id, const Vector2D& position, std::string path, CHyprColor color, int rounding, Config::CGradientValueData borderColor,
+                               int borderWidth) :
+        CRectNode(std::move(id), position, Vector2D{0, 0}, color, rounding, std::move(borderColor), borderWidth), m_path(std::move(path)) {
+        reload(); // sets the real m_size from the decoded texture, overwriting the {0,0} placeholder above
     }
 
     void CImageWidget::render(const Vector2D& origin, float parentOpacity, const Vector2D& scale) {
-        if (!m_visible || !m_texture)
+        if (!m_visible)
             return;
 
         const float opacity = composedOpacity(parentOpacity);
+        renderFill(origin, scale, opacity);
 
-        // boxAt(origin, scale) - NOT the texture's native size -
-        // deliberately unlike CTextNode::render(): stretching an image to
-        // fill an explicit fixed w/h is the expected/desired behavior
-        // here, so the layout box IS the draw box.
-        gfx::drawTexture(m_texture, boxAt(origin, scale), opacity, m_rounding);
+        if (m_texture) {
+            // boxAt(origin, scale) - NOT the texture's native size -
+            // deliberately unlike CTextNode::render(): stretching an image
+            // to fill an explicit fixed w/h is the expected/desired
+            // behavior here, so the layout box IS the draw box.
+            gfx::drawTexture(m_texture, boxAt(origin, scale), opacity, m_rounding);
+        }
 
-        if (m_borderWidth > 0)
-            gfx::drawBorder(boxAt(origin, scale), gfx::fadeGradient(m_borderColor, opacity), m_borderWidth, m_rounding);
+        renderBorder(origin, scale, opacity);
     }
 
     void CImageWidget::setImage(const std::string& path) {

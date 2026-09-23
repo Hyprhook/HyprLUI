@@ -295,35 +295,57 @@ in full. Tracked here going forward instead of as numbered phases.
       and `h` were both fully omitted (not explicitly `0`) **and** `fill`
       is not set - that specific combination means the box will be
       invisible with no other feedback.
-- [ ] **3. `LuaBridge.cpp` refactor** (currently ~1800 lines) - split into:
-      a new `parser/`-style directory for raw Lua-to-native resolution
-      (organized by what's parsed: a core/native parser for number/string/
-      boolean/table-or-not; shorthand parsers for the common number-or-
-      table conventions - color, edge insets, gradients; an animation-
-      config parser); per-widget-type builder functions (one function per
-      type, handling only that type's unique fields, all funneling into
-      the existing shared common-tail function that applies universal base
-      properties - padding, margin, opacity, z-index, animation overrides,
-      debug flags). Builder-pattern-style, no C++ class inheritance needed
-      for this part. `luaWindow()`, the runtime mutator functions, and
-      plugin registration/init stay in `LuaBridge.cpp` as-is.
-      `buildWidget()`'s if-else dispatch chain stays a plain chain
-      deliberately - not converting to a dispatch table now, revisit only
-      if it actually becomes painful to maintain.
-- [ ] **4. Rectangle as shared background-drawing base** - any widget that
-      draws its own background becomes a real subclass of the `Box`/
-      rectangle widget via inheritance: **Button, Input, Checkbox, and
-      Image** (and any future background-drawing widget) extend the
-      rectangle base rather than each separately re-implementing `color`/
-      `rounding`/`borderColor`/`borderWidth` - those fields live once on
-      the shared base. `Image` gains a genuine optional background-color
-      fill it's never had before (default: **transparent**), drawn behind
-      its texture - not just shared storage/parsing, real new visible
-      behavior for `Image` specifically. **Layout containers (Row, Column,
-      Stack) are explicitly excluded** - they don't draw a background, so
-      border/rounding on them wouldn't mean anything; their own manual/
-      automatic layout logic is unaffected. Supersedes Phase 19's
-      per-widget-duplicated field approach (see Completed history above).
+- [x] **3. `LuaBridge.cpp` refactor** (was ~1800 lines) - split into
+      `src/ui/parser/` (`ValueParsers` - number/string/boolean/table-or-
+      not; `ShorthandParsers` - color, edge insets, gradients;
+      `AnimationParsers` - curve/style/override; `CallbackParsers` -
+      onClick/onKey/onChange/onScroll field-to-std::function wrapping) and
+      `src/ui/WidgetBuilders.{hpp,cpp}` (one function per widget type,
+      each handling only that type's unique fields, funneling into a
+      shared `applyCommonWidgetProperties()` common-tail - padding,
+      margin, opacity, z-index, debug flags, interactive state, animation
+      overrides, fill). Builder-pattern-style, no C++ class inheritance
+      needed for this part. `luaWindow()`, the runtime mutator functions,
+      and plugin registration/init stayed in `LuaBridge.cpp` (now ~870
+      lines). `buildWidget()`'s if-else dispatch chain stayed a plain
+      chain, per the original plan - not converted to a dispatch table.
+      Pure internal restructuring - the Lua-facing API in `docs/api.md`
+      is unchanged, nothing in `demos/`/`hyprlandd.lua` needed touching.
+      Build verified clean from a fresh `build/` dir, standing extern-C
+      leak check still at 0.
+- [x] **4. Rectangle as shared background-drawing base** - `CButtonWidget`,
+      `CInputWidget`, `CCheckboxWidget`, and `CImageWidget` are now real
+      subclasses of `CRectNode` (`: public CRectNode`, not `CWidget`
+      directly) - `color`/`rounding`/`borderColor`/`borderWidth` and their
+      setters live once on the shared base, not duplicated per class.
+      `CImageWidget` gains a genuine optional background-color fill it
+      never had before (`color`, default **transparent**), drawn behind
+      its texture - real new visible behavior, not just shared storage.
+      **Layout containers (Row, Column, Stack) stay untouched** - they
+      don't draw a background, so this doesn't apply to them.
+      Supersedes Phase 19's per-widget-duplicated field approach.
+      - `CRectNode` split its rendering into `renderFill()`/
+        `renderBorder()` (protected) so a subclass that draws its own
+        content BETWEEN the two (Image's texture, Button/Input's
+        children) can sequence fill → own content → border, keeping the
+        border always on top instead of getting hidden under opaque
+        content drawn after the old combined fill+border step. Checkbox's
+        inner checked-square and Button/Input's children were reordered
+        to this same fill → content → border shape (no visible pixel
+        change for them - their content was already inset far enough
+        from the border band either way).
+      - `renderFill()` uses `effectiveFillColor()` (hover/disabled color
+        swap) uniformly now, rather than each subclass's own copy of that
+        call - as a side effect, a plain `Box` made interactive via
+        `onClick`/`onScroll` + `hoverColor` now gets the same hover-color
+        swap Button/Input/Checkbox already had, closing a gap that
+        existed before this refactor (Box never called
+        `effectiveFillColor()` at all).
+      - A failed `Image` load now still draws its fill/border (useful as
+        a visible fallback) instead of drawing nothing at all.
+      - Build verified clean from a fresh `build/` dir, standing extern-C
+        leak check still at 0. `docs/api.md` updated for `Image`'s new
+        `color` field.
 - [ ] **5. Config-reload persistence for whole windows** - a new,
       **separate** mechanism from `hyprlui.persistent(key, default)`
       (which already fully covers *values* surviving reload and needs no

@@ -1,5 +1,4 @@
 #include "InputWidget.hpp"
-#include "../render/gfx.hpp"
 
 #include <xkbcommon/xkbcommon-keysyms.h>
 
@@ -7,9 +6,7 @@ namespace HyprLUI {
 
     CInputWidget::CInputWidget(std::string id, const Vector2D& position, const Vector2D& size, CHyprColor color, int rounding, std::string initialText, CHyprColor textColor,
                                int textSize, std::string textFont, Config::CGradientValueData borderColor, int borderWidth) :
-        CWidget(std::move(id), position), m_color(color), m_rounding(rounding), m_borderColor(std::move(borderColor)), m_borderWidth(borderWidth), m_text(std::move(initialText)) {
-        m_size = size;
-
+        CRectNode(std::move(id), position, size, color, rounding, std::move(borderColor), borderWidth), m_text(std::move(initialText)) {
         // Small fixed left inset by default so text doesn't touch the
         // very edge - expressed as ordinary `padding` (left only) rather
         // than baked into the label's position, so a Lua-supplied
@@ -33,17 +30,12 @@ namespace HyprLUI {
             return;
 
         const float opacity = composedOpacity(parentOpacity);
-
-        CHyprColor  faded = effectiveFillColor(m_color);
-        faded.a *= opacity;
-        gfx::drawRect(boxAt(origin, scale), faded, m_rounding);
-
-        if (m_borderWidth > 0)
-            gfx::drawBorder(boxAt(origin, scale), gfx::fadeGradient(m_borderColor, opacity), m_borderWidth, m_rounding);
+        renderFill(origin, scale, opacity);
         // See CButtonWidget::render()'s comment - pass parentOpacity, not
-        // an already-self-multiplied value, so m_opacity isn't applied to
+        // an already-composed value, so m_opacity isn't applied to
         // children twice.
         CWidget::render(origin, parentOpacity, scale); // draws children (the auto label, plus any Lua-added ones) on top
+        renderBorder(origin, scale, opacity);          // drawn last, so it's never hidden under a child that happens to reach the edge
     }
 
     void CInputWidget::arrangeChildren() {

@@ -16,11 +16,8 @@
 // that resolves to. This class only reacts when told to; it never grabs or
 // releases focus on its own.
 
-#include "Widget.hpp"
+#include "RectNode.hpp"
 #include "TextNode.hpp"
-
-#include <hyprland/src/config/shared/complex/ComplexDataTypes.hpp>
-#include <hyprland/src/helpers/Color.hpp>
 
 #include <cstdint>
 #include <functional>
@@ -29,7 +26,7 @@
 
 namespace HyprLUI {
 
-    class CInputWidget : public CWidget {
+    class CInputWidget : public CRectNode {
       public:
         // `textColor`/`textSize`/`textFont` style the auto-owned display
         // label - same defaults CTextNode itself uses. `initialText` seeds
@@ -41,17 +38,6 @@ namespace HyprLUI {
                      Config::CGradientValueData borderColor = Config::CGradientValueData{CHyprColor{}}, int borderWidth = 0);
 
         void render(const Vector2D& origin, float parentOpacity = 1.0F, const Vector2D& scale = {1, 1}) override;
-
-        void setColor(const CHyprColor& color) {
-            m_color = color;
-        }
-        void setRounding(int rounding) {
-            m_rounding = rounding;
-        }
-        void setBorder(Config::CGradientValueData color, int width) {
-            m_borderColor = std::move(color);
-            m_borderWidth = width;
-        }
 
         // Sets the current text programmatically (e.g. pre-filling or
         // clearing a field from Lua) - updates the rendered label but,
@@ -121,10 +107,6 @@ namespace HyprLUI {
         void arrangeChildren() override;
 
       private:
-        CHyprColor                              m_color;
-        int                                     m_rounding;
-        Config::CGradientValueData              m_borderColor;
-        int                                     m_borderWidth;
         std::string                             m_text;
         std::shared_ptr<CTextNode>              m_label; // owned display child - see the .cpp for why it's added via addChild() rather than kept purely internal
         std::function<void(uint32_t, bool)>     m_onKey;

@@ -2,8 +2,11 @@
 //
 // RectNode.hpp
 //
-// A flat-filled rectangle - useful as a panel/button background behind
-// other nodes. Cheap enough to not need caching.
+// A flat-filled rectangle - useful standalone (Box) or as the shared
+// background-drawing base every other widget that draws its own
+// color/rounding/border (Button, Input, Checkbox, Image) inherits from,
+// instead of each separately re-implementing the same fields/rendering.
+// Cheap enough to not need caching.
 
 #include "Widget.hpp"
 
@@ -33,7 +36,19 @@ namespace HyprLUI {
             m_borderWidth = width;
         }
 
-      private:
+      protected:
+        // Split out of render() so a subclass that draws its own content
+        // BETWEEN the fill and the border (Image's texture, a future
+        // widget) can call these directly instead of render(): fill,
+        // then its own content, then renderBorder() last - so the border
+        // always ends up on top, never hidden underneath opaque content.
+        // Uses effectiveFillColor(), not the raw m_color, so hoverColor/
+        // disabledColor swap correctly for every subclass (and for a
+        // plain Box made interactive via onClick/onScroll) - one place
+        // for that logic instead of each subclass repeating it.
+        void       renderFill(const Vector2D& origin, const Vector2D& scale, float opacity);
+        void       renderBorder(const Vector2D& origin, const Vector2D& scale, float opacity);
+
         CHyprColor m_color;
         int        m_rounding;
         // See gfx::drawBorder() for the border-box model this draws
