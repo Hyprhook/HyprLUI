@@ -259,6 +259,14 @@ namespace HyprLUI {
             return m_zorder;
         }
 
+        // See CUIManager::hotReloadVisibility().
+        void setHotReload(bool hotReload) {
+            m_hotReload = hotReload;
+        }
+        bool hotReload() const {
+            return m_hotReload;
+        }
+
         CBox box() const {
             return {m_position, m_size};
         }
@@ -274,6 +282,7 @@ namespace HyprLUI {
         std::optional<double>                m_fixedW, m_fixedH;
         EZOrder                              m_zorder;
         bool                                 m_visibleFallback = true; // only consulted while m_root is null - see visible()/setVisible()
+        bool                                 m_hotReload       = false;
         PWidget                              m_root;
         std::optional<EAnchor>               m_anchor;
         std::string                          m_anchorMonitor;

@@ -240,6 +240,22 @@ namespace HyprLUI {
         // look it up and find nothing anyway). Same reasoning for hover.
         m_focusedInput  = {};
         m_hoveredWidget = {};
+        // m_hotReloadVisibility left untouched on purpose - see UIManager.hpp.
+    }
+
+    std::optional<bool> CUIManager::hotReloadVisibility(const std::string& name) const {
+        auto it = m_hotReloadVisibility.find(name);
+        if (it == m_hotReloadVisibility.end())
+            return std::nullopt;
+        return it->second;
+    }
+
+    void CUIManager::setHotReloadVisibility(const std::string& name, bool visible) {
+        m_hotReloadVisibility[name] = visible;
+    }
+
+    void CUIManager::clearHotReloadState() {
+        m_hotReloadVisibility.clear();
     }
 
 } // namespace HyprLUI

@@ -414,6 +414,7 @@
 ---@field anchor? HyprLUI.Anchor
 ---@field monitor? HyprLUI.MonitorSelector
 ---@field exclusive? HyprLUI.Edge
+---@field hotReload? boolean
 ---@field [1] HyprLUI.WidgetSpec
 
 -- Same shape window{} takes, but `name` is always populated on the way

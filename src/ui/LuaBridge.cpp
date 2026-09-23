@@ -172,6 +172,7 @@ namespace HyprLUI::Lua {
             const auto y            = fieldNumber(L, 1, "y", 0);
             const auto fw           = optFixedField(L, 1, "w");
             const auto fh           = optFixedField(L, 1, "h");
+            const bool hotReload    = optFieldBool(L, 1, "hotReload", false);
             const auto zStr         = optFieldString(L, 1, "zorder", "overlay");
             const auto anchorStr    = optFieldString(L, 1, "anchor", "");
             const auto monitorStr   = optFieldString(L, 1, "monitor", "");
@@ -215,17 +216,28 @@ namespace HyprLUI::Lua {
 
             const Vector2D size{fw ? *fw : root->size().x, fh ? *fh : root->size().y};
 
+            // hotReload restores the last recorded visibility instead of
+            // always opening visible - seeds `true` on a first-ever run.
+            const auto resolveInitialVisible = [&]() -> bool {
+                if (!hotReload)
+                    return true;
+                const bool v = mgr.hotReloadVisibility(name).value_or(true);
+                mgr.setHotReloadVisibility(name, v);
+                return v;
+            };
+
             // No anchor: x/y are a raw global position.
             if (anchorStr.empty()) {
                 auto canvas = mgr.createCanvas(name, {x, y}, size, zorder);
                 canvas->setFixedSize(fw, fh);
+                canvas->setHotReload(hotReload);
                 for (auto& binding : bindings)
                     canvas->addBinding(std::move(binding));
                 canvas->setRoot(root);
                 // Primed hidden first - a plain setVisible(true) alone
                 // would have nothing to animate FROM.
                 root->primeHidden();
-                root->setVisible(true);
+                root->setVisible(resolveInitialVisible());
                 canvas->damage();
                 lua_pushvalue(L, 1);
                 return 1;
@@ -261,6 +273,7 @@ namespace HyprLUI::Lua {
 
             auto canvas = mgr.createCanvas(name, {0, 0}, size, zorder);
             canvas->setFixedSize(fw, fh);
+            canvas->setHotReload(hotReload);
             canvas->setAnchor(anchor, std::string{monitor->name()}, {x, y});
 
             // Must happen BEFORE recomputeAnchorPosition() below, so this
@@ -289,7 +302,7 @@ namespace HyprLUI::Lua {
             }
 
             root->primeHidden();
-            root->setVisible(true);
+            root->setVisible(resolveInitialVisible());
             canvas->damage();
             lua_pushvalue(L, 1);
             return 1;
@@ -297,7 +310,11 @@ namespace HyprLUI::Lua {
 
         int luaRemoveCanvas(lua_State* L) {
             const std::string name = luaL_checkstring(L, 1);
-            CUIManager::get().removeCanvas(name);
+            auto&             mgr  = CUIManager::get();
+            // Unlike a reload's own automatic wipe, an explicit close should stick.
+            if (auto canvas = mgr.getCanvas(name); canvas && canvas->hotReload())
+                mgr.setHotReloadVisibility(name, false);
+            mgr.removeCanvas(name);
             CReservedAreaComposer::get().removeContribution(name); // no-op if `name` never had one
             return 0;
         }
@@ -306,18 +323,21 @@ namespace HyprLUI::Lua {
             const std::string name    = luaL_checkstring(L, 1);
             const bool        visible = lua_toboolean(L, 2);
 
-            auto              canvas = CUIManager::get().getCanvas(name);
+            auto&             mgr    = CUIManager::get();
+            auto              canvas = mgr.getCanvas(name);
             if (!canvas)
                 return luaL_error(L, "hyprlui.set_canvas_visible: no window named '%s'", name.c_str());
 
             // A hidden Input can't visibly be typed into, so it shouldn't
             // silently keep keyboard focus either.
-            if (!visible && CUIManager::get().isCanvasFocused(name))
-                CUIManager::get().blurFocusedInput();
+            if (!visible && mgr.isCanvasFocused(name))
+                mgr.blurFocusedInput();
 
             canvas->setVisible(visible);
             canvas->damage();
             CReservedAreaComposer::get().setActive(name, visible); // a hidden exclusive window reserves nothing
+            if (canvas->hotReload())
+                mgr.setHotReloadVisibility(name, visible);
             return 0;
         }
 

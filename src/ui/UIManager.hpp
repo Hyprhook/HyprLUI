@@ -15,6 +15,7 @@
 #include <hyprland/src/helpers/math/Math.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -153,6 +154,14 @@ namespace HyprLUI {
 
         void clear();
 
+        // --- Hot-reload visibility (window{hotReload=true}) -------------
+        // Remembers whether a named window was visible right before the
+        // last reload, so a fresh window() call can restore that (see
+        // docs/api.md). Not part of clear() - only PLUGIN_EXIT clears it.
+        std::optional<bool> hotReloadVisibility(const std::string& name) const;
+        void                setHotReloadVisibility(const std::string& name, bool visible);
+        void                clearHotReloadState();
+
       private:
         CUIManager()  = default;
         ~CUIManager() = default;
@@ -162,6 +171,7 @@ namespace HyprLUI {
         uint64_t                                 m_nextSequence = 0;
         SWidgetHit                               m_focusedInput;
         SWidgetHit                               m_hoveredWidget;
+        std::unordered_map<std::string, bool>    m_hotReloadVisibility;
     };
 
 } // namespace HyprLUI

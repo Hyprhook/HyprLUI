@@ -1,18 +1,20 @@
 local M = {}
 -- task-checks.lua
 --
--- Small toggle-window demos exercising DESIGN.md's active task list items
--- that actually have observable Lua-facing behavior: tasks 1, 2, 4. Task 3
+-- Small demos exercising DESIGN.md's active task list items that
+-- actually have observable Lua-facing behavior: tasks 1, 2, 4, 5. Task 3
 -- (LuaBridge.cpp split) is pure internal C++ restructuring with zero
 -- change to the Lua API - nothing to demo. Task 7 (Stack padding/margin)
 -- was a confirmed no-change. Not exhaustive coverage, just enough to
 -- eyeball-confirm each one's real runtime behavior.
 --
--- Same toggle-window pattern as demos/which-key.lua: a local tracks
--- whether this demo's window is currently open, reset to closed on every
--- config reload along with everything else (see hyprlandd.lua's own note
--- on why - HyprLUI wipes all windows on config.preReload, and this
--- module's locals reset the same way since the whole script re-runs).
+-- Tasks 1/2/4 use the same toggle-window pattern as demos/which-key.lua:
+-- a local tracks whether this demo's window is currently open, reset to
+-- closed on every config reload along with everything else (see
+-- hyprlandd.lua's own note on why - HyprLUI wipes all windows on
+-- config.preReload, and this module's locals reset the same way since
+-- the whole script re-runs). Task 5's window is deliberately NOT
+-- toggle-style - see its own section below for why.
 
 local function warn(label, err)
 	hl.notification.create({ text = label .. " failed: " .. tostring(err), timeout = 3000 })
@@ -210,10 +212,53 @@ local function toggleTask4()
 	task4Open = true
 end
 
+--------------------------------------------------
+---- Task 5: hotReload window attribute ----
+--------------------------------------------------
+-- Created unconditionally below (required for hotReload to do anything,
+-- see docs/api.md), not toggle-style like the others - explicit
+-- ALT+SHIFT+5/6 hide/show since there's no get_canvas_visible() to read
+-- state back after a reload. Verify: hide, reload, should come back
+-- hidden (not visible); same the other way with show.
+local TASK5_WINDOW = "hyprlui_task5_demo"
+
+if hl.plugin.hyprlui ~= nil then
+	local ok5, err5 = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = TASK5_WINDOW,
+			hotReload = true,
+			anchor = "bottom-left",
+			x = 20,
+			y = 20,
+			hl.plugin.hyprlui.Column({
+				id = "root",
+				gap = 4,
+				padding = 12,
+				hl.plugin.hyprlui.Text({ id = "title", text = "task 5: hotReload", size = 14, color = 0xffcba6f7 }),
+				hl.plugin.hyprlui.Text({
+					id = "hint",
+					text = "ALT+SHIFT+5 hides, ALT+SHIFT+6 shows - then reload, state should survive",
+					size = 11,
+					color = 0xff6c7086,
+				}),
+			}),
+		})
+	end)
+	if not ok5 then
+		warn("hyprlui.window (task5)", err5)
+	end
+end
+
 function M.test_binds()
 	hl.bind("ALT + SHIFT + 1", toggleTask1, { description = "task-checks: toggle task 1 demo (window naming)" })
 	hl.bind("ALT + SHIFT + 2", toggleTask2, { description = "task-checks: toggle task 2 demo (Box sizing)" })
 	hl.bind("ALT + SHIFT + 4", toggleTask4, { description = "task-checks: toggle task 4 demo (shared rect base)" })
+	hl.bind("ALT + SHIFT + 5", function()
+		hl.plugin.hyprlui.set_canvas_visible(TASK5_WINDOW, false)
+	end, { description = "task-checks: hide task 5 demo (hotReload)" })
+	hl.bind("ALT + SHIFT + 6", function()
+		hl.plugin.hyprlui.set_canvas_visible(TASK5_WINDOW, true)
+	end, { description = "task-checks: show task 5 demo (hotReload)" })
 end
 
 return M

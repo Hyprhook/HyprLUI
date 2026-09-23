@@ -161,6 +161,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     // the entire reason CPersistenceStore exists. Only a real unload
     // clears it.
     HyprLUI::CPersistenceStore::get().clear();
+    HyprLUI::CUIManager::get().clearHotReloadState(); // same reasoning
     HyprLUI::CReservedAreaComposer::get().unregisterHooks(Global::PHANDLE);
     HyprLUI::InputHook::unregisterHooks(Global::PHANDLE);
     HyprLUI::RenderHook::unregisterHooks(Global::PHANDLE);

@@ -339,7 +339,7 @@ any still-in-flight command/socket is torn down on the next config reload.
 
 ## Window construction and mutation
 
-- **`window{ name?, x = 0, y = 0, w, h, zorder = "overlay"|"background", anchor, monitor, exclusive, <exactly one root widget> }`**
+- **`window{ name?, x = 0, y = 0, w, h, zorder = "overlay"|"background", anchor, monitor, exclusive, hotReload = false, <exactly one root widget> }`**
   - opens a new window with the given widget tree as its root. If `w`/`h`
   are omitted the window sizes itself to the root's measured content.
   Errors if `name` is already in use. `name` is optional - if omitted, one
@@ -376,6 +376,22 @@ any still-in-flight command/socket is torn down on the next config reload.
     exclusive windows on the *same* edge don't stack relative to each
     other - fine for a single top bar, a second one needs manual x/y
     offsetting.
+  - `hotReload` (boolean, default `false`) - a config reload destroys and
+    rebuilds *every* HyprLUI window unconditionally (the whole Lua
+    interpreter is destroyed and recreated on every reload, so there's no
+    safe way to keep a window's callbacks alive across one). `hotReload`
+    doesn't change that - it just makes HyprLUI remember whether this
+    window was visible right before the last reload, and restores that
+    (instead of always opening visible) the next time `window{name=...,
+    hotReload=true, ...}` is called for the same name. **This only works
+    if that `window{}` call actually runs again on every reload** - e.g.
+    from a `require()`d module's function called unconditionally at the
+    top of the config (the same pattern `demos/which-key.lua` already
+    uses), not from a one-time hook like `hl.on("hyprland.start", ...)`,
+    which never fires again after the first boot. This is about *window
+    existence/visibility* only, not the values inside it - use
+    `hyprlui.persistent(key, default)` for those (a counter, a toggle
+    state, etc.), which already survives reloads independently.
   - A window's own open/close slide is configured via its root widget's
     `animationIn`/`animationOut.style` field (see Interactive state above)
     - not a separate `window{}` field. A window *is* its root widget as

@@ -356,19 +356,43 @@ in full. Tracked here going forward instead of as numbered phases.
       - Build verified clean from a fresh `build/` dir, standing extern-C
         leak check still at 0. `docs/api.md` updated for `Image`'s new
         `color` field.
-- [ ] **5. Config-reload persistence for whole windows** - a new,
-      **separate** mechanism from `hyprlui.persistent(key, default)`
-      (which already fully covers *values* surviving reload and needs no
-      change) - this one is about whole windows' open/closed existence. A
-      `persistent = true` attribute on window creation: HyprLUI tracks
-      whether that window was open right before a config reload and
-      automatically reopens it once the Lua script finishes re-running,
-      without the config author needing to manually re-trigger their own
-      startup/install logic. Motivating case: a status bar created via a
-      one-time startup hook only gets created once - today a reload
-      destroys it (the blunt wipe-everything mitigation, see Current
-      state) and nothing recreates it, since the startup hook never fires
-      again.
+- [x] **5. `hotReload` window attribute** - renamed from the originally
+      planned `persistent` during implementation: it isn't real
+      persistence (the canvas itself is still destroyed and rebuilt on
+      every reload, same as any other window - Hyprland's own
+      `reinitLuaState()` `lua_close()`s the whole interpreter on every
+      reload, so nothing holding a Lua callback ref could safely survive
+      anyway), it's closer to a hot-reload of *visibility state* only.
+      **Separate from `hyprlui.persistent(key, default)`** (unchanged,
+      already covers arbitrary *values* surviving reload) - this is only
+      about a window's open/closed state.
+      - `CUIManager` gained a small `name -> bool` map
+        (`m_hotReloadVisibility`), deliberately NOT wired into `clear()`
+        (the reload-wipe) - only `PLUGIN_EXIT` clears it, same "must
+        never be part of resetAllState()" pattern `CPersistenceStore`
+        already established. `CCanvas` gained a `hotReload` bool flag.
+      - `window{hotReload=true, ...}`: on creation, resolves initial
+        visibility from the tracked value if one exists (seeding `true`
+        on a first-ever run) instead of always opening visible.
+        `set_canvas_visible()`/`remove_canvas()` keep the tracked value
+        up to date on every explicit visibility change for such a
+        window. The automatic reload-wipe itself never touches the
+        tracked value - only explicit Lua-driven visibility changes do -
+        so whatever was last explicitly set is exactly what's still
+        there the instant `config.preReload` fires.
+      - **Real usage constraint, not just an implementation detail**: this
+        only works if the window's own `window{}` call actually runs
+        again on every reload (e.g. from a `require()`d module's
+        function called unconditionally, like `demos/which-key.lua`
+        already does) - NOT from a one-time hook like
+        `hl.on("hyprland.start", ...)`, which never fires again after
+        first boot. That was the original motivating gap (a status bar
+        built inside such a hook) - `hotReload` doesn't remove the need
+        to restructure that pattern, it only means the config author no
+        longer has to write their own preReload-detection/re-open logic
+        once they do.
+      - `docs/api.md`, `stubs/hyprlui.meta.lua` updated. Build verified
+        clean, standing extern-C leak check still at 0.
 - [ ] **6. Exclusive-zone / monitor-span sizing** - same-edge exclusive-
       window stacking stays **explicitly deferred indefinitely**, no
       priority, documented known limitation (see Architecture section 4).
@@ -427,6 +451,22 @@ in full. Tracked here going forward instead of as numbered phases.
       click-target status, consumes a click). Make it a **per-window
       option**, with the old pass-through/leak-through behavior available
       as an explicit opt-out.
+- [ ] **14. Anchor resolution at zero-monitor cold boot** - `luaWindow()`
+      currently `luaL_error`s outright if no monitor is available at all
+      when resolving an `anchor`ed window (the fallback chain is: named
+      selector -> focused monitor -> error if neither resolves anything).
+      Found via task 5's own usage guidance: creating an anchored window
+      unconditionally at top-level script load (the pattern `hotReload`
+      needs - see its own docs/api.md note) can occasionally race a
+      genuine Hyprland cold boot where no monitor has attached yet,
+      erroring instead of degrading gracefully. Every demo already
+      `pcall`s its `window()` calls, so this doesn't crash anything today
+      - it just means the window silently never appears until the next
+      reload, with only a notification/log line, no automatic retry.
+      Candidate fix: don't error immediately - retry once a monitor
+      actually connects (`Event::bus()`'s monitor-connected signal,
+      already used elsewhere for reserved-area reapplication) instead of
+      failing outright. Not yet designed.
 
 ## Open questions
 
