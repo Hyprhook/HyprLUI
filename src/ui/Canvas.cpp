@@ -26,7 +26,7 @@ namespace HyprLUI {
             // measured (size-to-content axes only - setFixedSize()'d axes
             // stay pinned) - see setFixedSize()'s doc comment for why this
             // has to happen every frame.
-            const Vector2D contentSize{m_fixedW ? *m_fixedW : m_root->size().x, m_fixedH ? *m_fixedH : m_root->size().y};
+            const Vector2D contentSize = resolveSpan({m_fixedW ? *m_fixedW : m_root->size().x, m_fixedH ? *m_fixedH : m_root->size().y});
             if (contentSize.x != m_size.x || contentSize.y != m_size.y) {
                 gfx::damageBox(fullDamageBox()); // old footprint, in case it shrunk
                 m_size = contentSize;
@@ -37,16 +37,18 @@ namespace HyprLUI {
 
             // Root-fills-canvas: if the root widget wants to fill its
             // window (CWidget::fill()) and this axis has a determinate
-            // size (m_fixedW/H set), force the root's just-measured size
-            // on that axis to match m_size instead of leaving it at
-            // whatever it naturally measured. An auto-sized axis has
-            // nothing determinate to fill and stays untouched. Runs after
-            // the sync above so it reads m_size's settled value.
+            // size (m_fixedW/H OR spanWidth/Height set - both make m_size
+            // authoritative rather than content-derived), force the
+            // root's just-measured size on that axis to match m_size
+            // instead of leaving it at whatever it naturally measured. An
+            // auto-sized axis has nothing determinate to fill and stays
+            // untouched. Runs after the sync above so it reads m_size's
+            // settled value.
             if (m_root->fill()) {
                 Vector2D size = m_root->size();
-                if (m_fixedW)
+                if (m_fixedW || m_spanWidth)
                     size.x = m_size.x;
-                if (m_fixedH)
+                if (m_fixedH || m_spanHeight)
                     size.y = m_size.y;
                 m_root->setSize(size);
             }
@@ -124,6 +126,25 @@ namespace HyprLUI {
         m_pendingRedamageFrames = REDAMAGE_FRAMES;
     }
 
+    Vector2D CCanvas::resolveSpan(Vector2D size) const {
+        if ((!m_spanWidth && !m_spanHeight) || !m_anchor)
+            return size;
+
+        auto monitor = State::CMonitorQuery{*State::monitorState()}.name(m_anchorMonitor).run();
+        if (!monitor)
+            return size;
+
+        // The monitor's raw box, not logicalBoxMinusReserved() - spanning
+        // is measured against the true screen edges (minus monitorPadding
+        // only), regardless of what else is currently reserved.
+        const auto box = monitor->logicalBox();
+        if (m_spanWidth)
+            size.x = box.size().x - m_monitorPadding.left - m_monitorPadding.right;
+        if (m_spanHeight)
+            size.y = box.size().y - m_monitorPadding.top - m_monitorPadding.bottom;
+        return size;
+    }
+
     bool CCanvas::recomputeAnchorPosition() {
         if (!m_anchor)
             return false;
@@ -196,7 +217,7 @@ namespace HyprLUI {
         // old one's pixels stale. fullDamageBox() (not the plain box()) so
         // the debug overlay's own overflow moves with it too.
         const auto oldBox = this->fullDamageBox();
-        m_position         = pos;
+        m_position        = pos;
         gfx::damageBox(oldBox);
         damage();
         return true;
@@ -210,7 +231,7 @@ namespace HyprLUI {
 
         // Same old+new damage dance as recomputeAnchorPosition() above.
         const auto oldBox = fullDamageBox();
-        m_position         = position;
+        m_position        = position;
         gfx::damageBox(oldBox);
         damage();
     }

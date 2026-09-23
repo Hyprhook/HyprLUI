@@ -393,16 +393,41 @@ in full. Tracked here going forward instead of as numbered phases.
         once they do.
       - `docs/api.md`, `stubs/hyprlui.meta.lua` updated. Build verified
         clean, standing extern-C leak check still at 0.
-- [ ] **6. Exclusive-zone / monitor-span sizing** - same-edge exclusive-
+- [x] **6. Exclusive-zone / monitor-span sizing** - same-edge exclusive-
       window stacking stays **explicitly deferred indefinitely**, no
       priority, documented known limitation (see Architecture section 4).
-      Add real monitor-span sizing instead, replacing the which-key demo's
-      current workaround (manually querying monitor width, setting it as a
-      raw window `w`): two **independent** boolean flags (flex width to
-      the monitor's width, flex height to the monitor's height - settable
-      independently) plus a separate **monitor padding** value that insets
-      the window from the true monitor edges once flexed (distinct from
-      the existing widget-level `padding`/`margin`).
+      Added real monitor-span sizing: `window{}` gained `spanWidth`/
+      `spanHeight` (independent booleans, require `anchor`) and
+      `monitorPadding` (number or `{top,right,bottom,left}`, reusing the
+      same `optInsetsField()` parser as widget `padding`/`margin`). Wins
+      over an explicit `w`/`h` on the same axis if both are given.
+      - `CCanvas::resolveSpan()` re-reads the live monitor's raw box
+        (not reserved-adjusted - "true monitor edges" per the task's own
+        wording) every `render()` frame, same as anchor position already
+        does, and overrides the size `render()`'s existing content-size
+        sync would otherwise have used. `luaWindow()` also applies it
+        once at creation time (using the monitor it already resolved for
+        anchoring) so exclusive-zone contribution seeding isn't a frame
+        late.
+      - `demos/which-key.lua`'s manual `focusedMonitorWidth()` workaround
+        (a raw `hl.get_monitors()` query) is gone, replaced by
+        `spanWidth = true, monitorPadding = CONFIG.xOffset` - the actual
+        motivating case this task named.
+      - `docs/api.md`, `stubs/hyprlui.meta.lua` updated (including the
+        `window{}` exclusive-bar example, which used to explicitly call
+        out this as a missing feature). Build verified clean, standing
+        extern-C leak check still at 0.
+      - **Bug found live (task-checks.lua's own task 6 demo) and fixed
+        same-session**: an unsized, `fill=true` root widget rendered at
+        0x0 (invisible) on a spanned window - `render()`'s root-fills-
+        canvas step only treated an axis as "determinate" (worth
+        stretching `fill` to) when `m_fixedW`/`m_fixedH` was set, a check
+        that predates spanning and never learned about it, even though
+        `resolveSpan()` a few lines above already made `m_size` itself
+        correct. Fixed by also checking `m_spanWidth`/`m_spanHeight`
+        there. Affected `demos/which-key.lua`'s own root `Stack` too
+        (same `fill=true` + `spanWidth` combination), not just the new
+        demo.
 - [x] **7. Stack padding/margin** - confirmed no change: `Stack`'s manual/
       absolute positioning continues to ignore `padding`/`margin`
       entirely, by design.
@@ -467,6 +492,22 @@ in full. Tracked here going forward instead of as numbered phases.
       actually connects (`Event::bus()`'s monitor-connected signal,
       already used elsewhere for reserved-area reapplication) instead of
       failing outright. Not yet designed.
+- [ ] **15. Extend the rectangle base to `Text`** - `CTextNode` still
+      inherits `CWidget` directly, not `CRectNode` - task 4 deliberately
+      scoped it to `Button`/`Input`/`Checkbox`/`Image` (widgets that
+      already drew their own fill/border) and left `Text` out, since it
+      only rasterizes glyphs and had no background concept to unify.
+      Found live: `demos/task-checks.lua`'s task 6 demo tried nesting a
+      `Text` inside a `Box` expecting a labeled background panel as one
+      widget - doesn't work (`Box` never renders children, see task 6's
+      own entry above), current workaround is `Stack{Box, Text}` as
+      siblings, which stays the standard pattern for now. Would let a
+      single `Text{ color=..., borderColor=..., borderWidth=... }` draw
+      its own background/border behind its glyphs, same as the other
+      four. Not yet designed - in particular whether `renderFill()`'s
+      existing gfx::drawRect() call and `CTextNode::render()`'s texture
+      draw would need reordering the same way Image's did in task 4 (fill
+      -> texture -> border, so the border stays on top).
 
 ## Open questions
 

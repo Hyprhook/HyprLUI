@@ -7,6 +7,7 @@
 #include "CheckboxWidget.hpp"
 #include "ComponentRegistry.hpp"
 #include "parser/ValueParsers.hpp"
+#include "parser/ShorthandParsers.hpp"
 #include "parser/AnimationParsers.hpp"
 #include "../reactive/Watcher.hpp"
 #include "../reserved/ReservedAreaComposer.hpp"
@@ -168,20 +169,26 @@ namespace HyprLUI::Lua {
             lua_pushstring(L, name.c_str());
             lua_setfield(L, 1, "name");
 
-            const auto x            = fieldNumber(L, 1, "x", 0);
-            const auto y            = fieldNumber(L, 1, "y", 0);
-            const auto fw           = optFixedField(L, 1, "w");
-            const auto fh           = optFixedField(L, 1, "h");
-            const bool hotReload    = optFieldBool(L, 1, "hotReload", false);
-            const auto zStr         = optFieldString(L, 1, "zorder", "overlay");
-            const auto anchorStr    = optFieldString(L, 1, "anchor", "");
-            const auto monitorStr   = optFieldString(L, 1, "monitor", "");
-            const auto exclusiveStr = optFieldString(L, 1, "exclusive", "");
+            const auto x              = fieldNumber(L, 1, "x", 0);
+            const auto y              = fieldNumber(L, 1, "y", 0);
+            const auto fw             = optFixedField(L, 1, "w");
+            const auto fh             = optFixedField(L, 1, "h");
+            const bool hotReload      = optFieldBool(L, 1, "hotReload", false);
+            const auto zStr           = optFieldString(L, 1, "zorder", "overlay");
+            const auto anchorStr      = optFieldString(L, 1, "anchor", "");
+            const auto monitorStr     = optFieldString(L, 1, "monitor", "");
+            const auto exclusiveStr   = optFieldString(L, 1, "exclusive", "");
+            const bool spanWidth      = optFieldBool(L, 1, "spanWidth", false);
+            const bool spanHeight     = optFieldBool(L, 1, "spanHeight", false);
+            const auto monitorPadding = optInsetsField(L, 1, "monitorPadding", "hyprlui.window").value_or(SEdgeInsets{});
 
             if (!exclusiveStr.empty() && anchorStr.empty())
                 return luaL_error(L,
                                   "hyprlui.window: 'exclusive' requires 'anchor' - a reserved zone needs a resolved target monitor, and anchor is currently the only "
                                   "thing that gives us one");
+
+            if ((spanWidth || spanHeight) && anchorStr.empty())
+                return luaL_error(L, "hyprlui.window: 'spanWidth'/'spanHeight' require 'anchor' - spanning needs a resolved target monitor to span against");
 
             EZOrder zorder = EZOrder::Overlay;
             if (zStr == "background")
@@ -271,10 +278,20 @@ namespace HyprLUI::Lua {
             if (!monitor)
                 return luaL_error(L, "hyprlui.window: no monitor available to anchor '%s' against", name.c_str());
 
-            auto canvas = mgr.createCanvas(name, {0, 0}, size, zorder);
+            // Applied here too (not just every render() frame via
+            // CCanvas::resolveSpan()) so exclusive-zone seeding below sees
+            // the correct size from frame 1, not one frame late.
+            Vector2D spannedSize = size;
+            if (spanWidth)
+                spannedSize.x = monitor->logicalBox().size().x - monitorPadding.left - monitorPadding.right;
+            if (spanHeight)
+                spannedSize.y = monitor->logicalBox().size().y - monitorPadding.top - monitorPadding.bottom;
+
+            auto canvas = mgr.createCanvas(name, {0, 0}, spannedSize, zorder);
             canvas->setFixedSize(fw, fh);
             canvas->setHotReload(hotReload);
             canvas->setAnchor(anchor, std::string{monitor->name()}, {x, y});
+            canvas->setSpan(spanWidth, spanHeight, monitorPadding);
 
             // Must happen BEFORE recomputeAnchorPosition() below, so this
             // window positions itself correctly from the very first frame.

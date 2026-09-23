@@ -301,40 +301,22 @@ local function modLabel(modmask)
 	return table.concat(parts, "+") .. "+"
 end
 
--- The focused monitor's pixel width, for a full-width bar matching the
--- eww reference's `:width "100%"` - confirmed hl.get_monitors() exists
--- and returns rich Monitor objects (.width/.focused/etc, see
--- LuaMonitor.cpp) natively, no HyprLUI-side feature needed for this.
-local function focusedMonitorWidth()
-	local ok, monitors = pcall(hl.get_monitors)
-	if not ok or not monitors then
-		return 1920
-	end
-	for _, m in ipairs(monitors) do
-		if m.focused then
-			return m.width
-		end
-	end
-	return monitors[1] and monitors[1].width or 1920
-end
-
 --------------------------------------------------
 ---- rendering ----
 --------------------------------------------------
 
--- Single customization block for this demo. `xOffset`/`yOffset` are
--- window-level settings (the popup's offset from its anchored screen
--- edge/corner), not widget props, so they can't live inside the
--- component itself - kept here anyway so every user-facing knob this
--- demo exposes (per the request this was built against: x/y anchor
--- offset, theme colors, font + size, in/out animation) has exactly one
--- place to edit. Everything else here is passed straight through to the
--- WhichKeyPopup component below (defaults: Catppuccin Mocha, same
--- palette as the eww reference's eww.scss - base #1e1e2e, mauve #cba6f7,
--- blue #89b4fa, peach #fac6a7).
+-- Single customization block for this demo. `yOffset`/`monitorPadding`
+-- are window-level settings (the popup's own horizontal position offset,
+-- and the spanned-width popup's left/right inset from the true monitor
+-- edges - two independent things, not widget props), so they can't live
+-- inside the component itself - kept here anyway so every user-facing
+-- knob this demo exposes has exactly one place to edit. Everything else
+-- here is passed straight through to the WhichKeyPopup component below
+-- (defaults: Catppuccin Mocha, same palette as the eww reference's
+-- eww.scss - base #1e1e2e, mauve #cba6f7, blue #89b4fa, peach #fac6a7).
 local CONFIG = {
-	xOffset = 0,
-	yOffset = 20,
+	yOffset = 0,
+	monitorPadding = 0,
 	bgColor = 0xff1e1e2e,
 	keyColor = 0xff89b4fa,
 	descColor = 0xfffac6a7,
@@ -486,10 +468,10 @@ end
 
 -- Call any time after require()'ing this module - order against
 -- M.test_binds()/the module's own always-active hl.on("keybinds.submap",
--- ...) hook doesn't matter, since buildPopup/CONFIG.xOffset/CONFIG.
--- yOffset are only ever READ once a submap change actually fires a
--- rebuild, never at require() time. Re-call this on every config reload
--- alongside the require() that brings the module back in, same as
+-- ...) hook doesn't matter, since buildPopup/CONFIG.yOffset/
+-- CONFIG.monitorPadding are only ever READ once a submap change actually
+-- fires a rebuild, never at require() time. Re-call this on every config
+-- reload alongside the require() that brings the module back in, same as
 -- M.test_binds() - the whole module (including CONFIG/buildPopup's
 -- defaults) re-evaluates from scratch every reload, so an override made
 -- before the last reload is gone.
@@ -498,11 +480,11 @@ function M.setup(opts)
 	if opts.buildPopup then
 		buildPopup = opts.buildPopup
 	end
-	if opts.xOffset then
-		CONFIG.xOffset = opts.xOffset
-	end
 	if opts.yOffset then
 		CONFIG.yOffset = opts.yOffset
+	end
+	if opts.monitorPadding then
+		CONFIG.monitorPadding = opts.monitorPadding
 	end
 end
 
@@ -524,9 +506,9 @@ local function buildAndShow(submap, allBinds)
 		hl.plugin.hyprlui.window({
 			name = WHICH_KEY_WINDOW,
 			anchor = "bottom",
-			w = focusedMonitorWidth() - (CONFIG.xOffset * 2),
-			x = 0,
 			y = CONFIG.yOffset,
+			spanWidth = true,
+			monitorPadding = { left = CONFIG.monitorPadding, right = CONFIG.monitorPadding },
 			buildPopup(columns),
 		})
 	end)

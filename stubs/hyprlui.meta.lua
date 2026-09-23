@@ -414,6 +414,9 @@
 ---@field anchor? HyprLUI.Anchor
 ---@field monitor? HyprLUI.MonitorSelector
 ---@field exclusive? HyprLUI.Edge
+---@field spanWidth? boolean
+---@field spanHeight? boolean
+---@field monitorPadding? HyprLUI.EdgeInsets
 ---@field hotReload? boolean
 ---@field [1] HyprLUI.WidgetSpec
 

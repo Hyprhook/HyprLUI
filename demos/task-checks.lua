@@ -2,11 +2,11 @@ local M = {}
 -- task-checks.lua
 --
 -- Small demos exercising DESIGN.md's active task list items that
--- actually have observable Lua-facing behavior: tasks 1, 2, 4, 5. Task 3
--- (LuaBridge.cpp split) is pure internal C++ restructuring with zero
--- change to the Lua API - nothing to demo. Task 7 (Stack padding/margin)
--- was a confirmed no-change. Not exhaustive coverage, just enough to
--- eyeball-confirm each one's real runtime behavior.
+-- actually have observable Lua-facing behavior: tasks 1, 2, 4, 5, 6.
+-- Task 3 (LuaBridge.cpp split) is pure internal C++ restructuring with
+-- zero change to the Lua API - nothing to demo. Task 7 (Stack padding/
+-- margin) was a confirmed no-change. Not exhaustive coverage, just
+-- enough to eyeball-confirm each one's real runtime behavior.
 --
 -- Tasks 1/2/4 use the same toggle-window pattern as demos/which-key.lua:
 -- a local tracks whether this demo's window is currently open, reset to
@@ -249,6 +249,55 @@ if hl.plugin.hyprlui ~= nil then
 	end
 end
 
+--------------------------------------------------
+---- Task 6: monitor-span sizing ----
+--------------------------------------------------
+-- A full-width, exclusive top bar - spanWidth stretches it to the
+-- monitor's own width (minus monitorPadding on each side) instead of a
+-- manually-queried width, replacing the workaround which-key.lua used to
+-- need (see its own history). Root is a Stack (fill=true picks up the
+-- spanned width) with the Box and Text as SIBLINGS, not nested - Box
+-- never renders children (only Button/Input do), see docs/api.md.
+
+local TASK6_WINDOW = "hyprlui_task6_demo"
+local task6Open = false
+
+local function toggleTask6()
+	if task6Open then
+		hl.plugin.hyprlui.remove_canvas(TASK6_WINDOW)
+		task6Open = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = TASK6_WINDOW,
+			anchor = "top",
+			exclusive = "top",
+			spanWidth = true,
+			monitorPadding = { left = 20, right = 20 },
+			hl.plugin.hyprlui.Stack({
+				id = "root",
+				h = 32,
+				fill = true,
+				hl.plugin.hyprlui.Box({ id = "bg", fill = true, color = 0xff313244 }),
+				hl.plugin.hyprlui.Text({
+					x = 10,
+					y = 8,
+					text = "task 6: spanWidth + exclusive",
+					size = 12,
+					color = 0xffcba6f7,
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		warn("hyprlui.window (task6)", err)
+		return
+	end
+	task6Open = true
+end
+
 function M.test_binds()
 	hl.bind("ALT + SHIFT + 1", toggleTask1, { description = "task-checks: toggle task 1 demo (window naming)" })
 	hl.bind("ALT + SHIFT + 2", toggleTask2, { description = "task-checks: toggle task 2 demo (Box sizing)" })
@@ -259,6 +308,7 @@ function M.test_binds()
 	hl.bind("ALT + SHIFT + 6", function()
 		hl.plugin.hyprlui.set_canvas_visible(TASK5_WINDOW, true)
 	end, { description = "task-checks: show task 5 demo (hotReload)" })
+	hl.bind("ALT + SHIFT + 3", toggleTask6, { description = "task-checks: toggle task 6 demo (monitor-span sizing)" })
 end
 
 return M

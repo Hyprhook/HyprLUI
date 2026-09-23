@@ -194,6 +194,16 @@ namespace HyprLUI {
             m_exclusiveEdge = edge;
         }
 
+        // Spans this window's width/height to the monitor's own (minus
+        // `padding`), re-read live each frame like the anchor position
+        // itself - overrides any fixed/content size on that axis. No-op
+        // without an anchor (no resolved monitor to span against).
+        void setSpan(bool spanWidth, bool spanHeight, const SEdgeInsets& padding) {
+            m_spanWidth      = spanWidth;
+            m_spanHeight     = spanHeight;
+            m_monitorPadding = padding;
+        }
+
         // No-op if no anchor is set. If the anchor's target monitor is
         // currently unresolvable (unplugged since creation), keeps the
         // last known m_position rather than snapping to (0,0). Returns
@@ -274,7 +284,12 @@ namespace HyprLUI {
       private:
         // See damage()'s doc comment - matches Hyprland's own CDamageRing
         // depth (3) + 1.
-        static constexpr int                 REDAMAGE_FRAMES = 4;
+        static constexpr int REDAMAGE_FRAMES = 4;
+
+        // Starting from `size`, overrides the spanned axes with the live
+        // monitor's own size minus m_monitorPadding - a no-op per axis
+        // unless m_spanWidth/m_spanHeight is set and m_anchor is resolvable.
+        Vector2D                             resolveSpan(Vector2D size) const;
 
         std::string                          m_name;
         Vector2D                             m_position;
@@ -288,6 +303,9 @@ namespace HyprLUI {
         std::string                          m_anchorMonitor;
         Vector2D                             m_anchorOffset;
         std::optional<EEdge>                 m_exclusiveEdge;
+        bool                                 m_spanWidth  = false;
+        bool                                 m_spanHeight = false;
+        SEdgeInsets                          m_monitorPadding;
         int                                  m_pendingRedamageFrames = 0;
         std::vector<std::function<void()>>   m_bindings;
         uint64_t                             m_sequence = 0;

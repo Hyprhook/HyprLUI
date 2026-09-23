@@ -77,7 +77,11 @@ for its own type:
   mirroring Hyprland's own `general:col.active_border` syntax. The border
   is drawn *inset* into the widget's own box (CSS border-box - the box's
   size never changes), not grown outward the way Hyprland's window borders
-  are.
+  are. **`Box` does not render children** - unlike `Button`/`Input`
+  below, it's a pure leaf; a `Text` (or anything else) nested inside a
+  `Box{}` still gets positioned/measured but is never drawn. Use a
+  `Stack` with the `Box` and the label as siblings instead (a background
+  panel + content layered over it, not nested).
 - **`Button{ id, x = 0, y = 0, w, h, color, rounding = 0, borderColor, borderWidth = 0, visible, onClick, <children...> }`**
   - like `Box`, but always a real click target structurally, even with no
   `onClick` set (left-click only). Children are positioned
@@ -339,7 +343,7 @@ any still-in-flight command/socket is torn down on the next config reload.
 
 ## Window construction and mutation
 
-- **`window{ name?, x = 0, y = 0, w, h, zorder = "overlay"|"background", anchor, monitor, exclusive, hotReload = false, <exactly one root widget> }`**
+- **`window{ name?, x = 0, y = 0, w, h, zorder = "overlay"|"background", anchor, monitor, exclusive, spanWidth = false, spanHeight = false, monitorPadding = 0, hotReload = false, <exactly one root widget> }`**
   - opens a new window with the given widget tree as its root. If `w`/`h`
   are omitted the window sizes itself to the root's measured content.
   Errors if `name` is already in use. `name` is optional - if omitted, one
@@ -376,6 +380,17 @@ any still-in-flight command/socket is torn down on the next config reload.
     exclusive windows on the *same* edge don't stack relative to each
     other - fine for a single top bar, a second one needs manual x/y
     offsetting.
+  - `spanWidth`/`spanHeight` (booleans, default `false`, require `anchor`)
+    - flex that axis to the target monitor's own width/height (re-read
+    live every frame, like the anchor position itself), instead of sizing
+    from `w`/`h`/content - settable independently, e.g. `spanWidth = true`
+    alone leaves height sized to content. Wins over an explicit `w`/`h` on
+    the same axis if both are given. `monitorPadding` (a number, or a
+    table `{top, right, bottom, left}` like `padding`/`margin`) insets the
+    spanned edges from the monitor's true screen edges - measured against
+    the raw monitor box, not what's already reserved by other bars/
+    panels, so a spanning window can still visually reach edge-to-edge
+    regardless of other exclusive zones elsewhere on the monitor.
   - `hotReload` (boolean, default `false`) - a config reload destroys and
     rebuilds *every* HyprLUI window unconditionally (the whole Lua
     interpreter is destroyed and recreated on every reload, so there's no
@@ -485,13 +500,13 @@ hyprlui.window{
     },
 }
 
--- exclusive: a 32px-tall top bar that actually reserves its own height,
--- pushing tiled windows on this monitor down out of the way. No "span
--- the full monitor width" feature exists yet - the bar's width here is
--- just whatever its content needs (400px):
+-- exclusive + spanWidth: a 32px-tall top bar spanning the full monitor
+-- width (minus 8px on each side), that also reserves its own height,
+-- pushing tiled windows on this monitor down out of the way:
 hyprlui.window{
     name = "bar", anchor = "top", exclusive = "top",
-    hyprlui.Box{ id = "bg", w = 400, h = 32, color = 0xff222222 },
+    spanWidth = true, monitorPadding = { left = 8, right = 8 },
+    hyprlui.Box{ id = "bg", h = 32, fill = true, color = 0xff222222 },
 }
 ```
 
