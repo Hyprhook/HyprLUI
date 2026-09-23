@@ -66,8 +66,12 @@ for its own type:
 - **`Text{ id, x = 0, y = 0, text, size = 16, color, font = "sans", visible }`**
   - `text` may be a plain string or `Bind(name)` (see Reactivity) to keep
   it tracking a watcher's current value.
-- **`Box{ id, x = 0, y = 0, w, h, color, rounding = 0, borderColor, borderWidth = 0, visible }`**
-  - a flat-filled rectangle. `color`/`borderColor` are either a packed
+- **`Box{ id, x = 0, y = 0, w = 0, h = 0, color, rounding = 0, borderColor, borderWidth = 0, visible }`**
+  - a flat-filled rectangle. `w`/`h` default to `0` if omitted rather than
+  erroring - almost always paired with `fill = true` in practice. If both
+  are omitted *and* `fill` isn't set, the box is invisible; logs a warning
+  when `debug` is on for it (own or inherited) to flag that specific
+  combination. `color`/`borderColor` are either a packed
   `0xAARRGGBB` integer or a table `{ r, g, b, a }` (components in `[0,1]`),
   or - for `borderColor` - a gradient spec `{ colors = {...}, angle }`,
   mirroring Hyprland's own `general:col.active_border` syntax. The border

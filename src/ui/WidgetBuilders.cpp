@@ -25,14 +25,23 @@ namespace HyprLUI::Lua {
 
     namespace {
 
-        PWidget buildBoxWidget(lua_State* L, int idx, const std::string& id, const Vector2D& pos) {
-            const double w           = requireFieldNumber(L, idx, "w", "hyprlui.Box");
-            const double h           = requireFieldNumber(L, idx, "h", "hyprlui.Box");
-            const auto   color       = parseColorField(L, idx, "color", CHyprColor{1.0, 1.0, 1.0, 1.0}, "hyprlui.Box");
-            const int    rounding    = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
-            const auto   borderColor = parseGradientField(L, idx, "borderColor", CHyprColor{}, "hyprlui.Box");
-            const int    borderWidth = static_cast<int>(fieldNumber(L, idx, "borderWidth", 0));
-            return std::make_shared<CRectNode>(id, pos, Vector2D{w, h}, color, rounding, borderColor, borderWidth);
+        // Unsized (no w/h) defaults to 0x0 rather than erroring - almost
+        // always paired with `fill` in practice. Warns (debug-gated) when
+        // w/h are both fully omitted (not explicitly 0) and fill isn't
+        // set either, since that combination is silently invisible.
+        PWidget buildBoxWidget(lua_State* L, int idx, const std::string& id, const Vector2D& pos, bool debugEnabled) {
+            const auto wOpt        = optFixedField(L, idx, "w");
+            const auto hOpt        = optFixedField(L, idx, "h");
+            const auto color       = parseColorField(L, idx, "color", CHyprColor{1.0, 1.0, 1.0, 1.0}, "hyprlui.Box");
+            const int  rounding    = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
+            const auto borderColor = parseGradientField(L, idx, "borderColor", CHyprColor{}, "hyprlui.Box");
+            const int  borderWidth = static_cast<int>(fieldNumber(L, idx, "borderWidth", 0));
+            const bool fill        = optFieldBool(L, idx, "fill", false);
+
+            if (!wOpt && !hOpt && !fill && debugEnabled)
+                Log::logger->log(Log::WARN, "[hyprlui] Box '{}': no w/h and no fill - will be invisible (0x0)", id);
+
+            return std::make_shared<CRectNode>(id, pos, Vector2D{wOpt.value_or(0.0), hOpt.value_or(0.0)}, color, rounding, borderColor, borderWidth);
         }
 
         PWidget buildImageWidget(lua_State* L, int idx, const std::string& id, const Vector2D& pos) {
@@ -255,7 +264,7 @@ namespace HyprLUI::Lua {
 
     } // namespace
 
-    PWidget buildWidget(lua_State* L, int idx, int& autoId, std::vector<std::function<void()>>& bindings, std::unordered_set<std::string>& seenIds) {
+    PWidget buildWidget(lua_State* L, int idx, int& autoId, std::vector<std::function<void()>>& bindings, std::unordered_set<std::string>& seenIds, bool inheritedDebug) {
         idx = lua_absindex(L, idx);
         luaL_checktype(L, idx, LUA_TTABLE);
 
@@ -280,10 +289,17 @@ namespace HyprLUI::Lua {
         const Vector2D pos{fieldNumber(L, idx, "x", 0), fieldNumber(L, idx, "y", 0)};
         const bool     visible = optFieldBool(L, idx, "visible", true);
 
-        PWidget        widget;
+        // Mirrors resolveDebugSpec()'s per-frame cascade (Widget.cpp), but
+        // computed once here at construction time, for buildBoxWidget()'s
+        // warning below - not a substitute for the real per-frame resolve,
+        // which still separately drives the debug overlay itself.
+        const bool debugEnabled = optFieldBoolOpt(L, idx, "debug").value_or(inheritedDebug);
+        const bool childDebug   = optFieldBool(L, idx, "debugCascade", true) ? debugEnabled : false;
+
+        PWidget    widget;
 
         if (type == "box")
-            widget = buildBoxWidget(L, idx, id, pos);
+            widget = buildBoxWidget(L, idx, id, pos, debugEnabled);
         else if (type == "image")
             widget = buildImageWidget(L, idx, id, pos);
         else if (type == "divider")
@@ -311,7 +327,7 @@ namespace HyprLUI::Lua {
         for (lua_Integer i = 1; i <= static_cast<lua_Integer>(n); ++i) {
             lua_rawgeti(L, idx, i);
             if (lua_istable(L, -1))
-                widget->addChild(buildWidget(L, lua_gettop(L), autoId, bindings, seenIds));
+                widget->addChild(buildWidget(L, lua_gettop(L), autoId, bindings, seenIds, childDebug));
             lua_pop(L, 1);
         }
 

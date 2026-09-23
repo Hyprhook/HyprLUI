@@ -289,16 +289,22 @@ in full. Tracked here going forward instead of as numbered phases.
       reference the window later can grab the name off the return value
       with no separate lookup needed. `docs/api.md` updated. Build
       verified clean, standing extern-C leak check still at 0.
-- [ ] **2. Box sizing default** - An unsized `Box` (no `w`/`h` given)
-      defaults to `0x0` instead of erroring. Rationale: in practice an
-      unsized Box is almost always paired with `fill` anyway (the
-      which-key demo's `w=1, h=1, fill=true` placeholder is exactly this
-      pattern by hand) - `0x0` just makes that the honest default instead
-      of a workaround. Add a debug-flag-gated warning (reusing the
-      existing per-widget `debug` flag, no new one): log **only** when `w`
-      and `h` were both fully omitted (not explicitly `0`) **and** `fill`
-      is not set - that specific combination means the box will be
-      invisible with no other feedback.
+- [x] **2. Box sizing default** - An unsized `Box` defaults to `0x0`
+      instead of erroring (`buildBoxWidget()`, `WidgetBuilders.cpp`).
+      Warns via `Log::WARN` only when `w`/`h` are both fully omitted (not
+      explicitly `0`) *and* `fill` isn't set.
+      - The warning gate (`debug`) needed to be the **cascade-resolved**
+        value, not just this widget's own literal field - `debug`
+        normally gets set once near a window's root and inherited, so an
+        own-field-only check would almost never fire in practice.
+        `resolveDebugSpec()`'s cascade only runs per-frame though, not at
+        construction time - so `buildWidget()` now separately computes
+        the same merge once during construction (`inheritedDebug`
+        parameter, threaded through the recursion) purely for this
+        diagnostic; the real per-frame resolve for the debug overlay
+        itself is untouched.
+      - Build verified clean, standing extern-C leak check still at 0.
+        `docs/api.md` updated.
 - [x] **3. `LuaBridge.cpp` refactor** (was ~1800 lines) - split into
       `src/ui/parser/` (`ValueParsers` - number/string/boolean/table-or-
       not; `ShorthandParsers` - color, edge insets, gradients;

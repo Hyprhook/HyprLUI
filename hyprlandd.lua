@@ -63,3 +63,6 @@ end
 local which_key = require("./demos/which-key")
 which_key.setup(opts)
 which_key.test_binds()
+
+local task_checks = require("./demos/task-checks")
+task_checks.test_binds()

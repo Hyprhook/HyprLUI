@@ -239,8 +239,8 @@
 ---@field hitTarget? boolean
 
 ---@class HyprLUI.BoxSpec : HyprLUI.WidgetCommon
----@field w number
----@field h number
+---@field w? number
+---@field h? number
 ---@field color? HyprLUI.Color
 ---@field rounding? integer
 ---@field borderColor? HyprLUI.BorderColor
@@ -405,7 +405,7 @@
 -- AnimationOverride), not a field here - a window IS its root widget as
 -- far as visibility/animation goes.
 ---@class HyprLUI.WindowSpec
----@field name string
+---@field name? string
 ---@field x? number
 ---@field y? number
 ---@field w? number
@@ -416,8 +416,13 @@
 ---@field exclusive? HyprLUI.Edge
 ---@field [1] HyprLUI.WidgetSpec
 
+-- Same shape window{} takes, but `name` is always populated on the way
+-- out - auto-generated if the caller didn't give one.
+---@class HyprLUI.WindowResult : HyprLUI.WindowSpec
+---@field name string
+
 ---@class HyprLUI.API
----@field window fun(spec: HyprLUI.WindowSpec): nil
+---@field window fun(spec: HyprLUI.WindowSpec): HyprLUI.WindowResult
 ---@field Stack fun(spec: HyprLUI.StackSpec): HyprLUI.StackSpec
 ---@field Row fun(spec: HyprLUI.FlexSpec): HyprLUI.FlexSpec
 ---@field Column fun(spec: HyprLUI.FlexSpec): HyprLUI.FlexSpec

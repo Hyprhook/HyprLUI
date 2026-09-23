@@ -25,6 +25,9 @@ namespace HyprLUI::Lua {
     // found - the caller (luaWindow()) attaches them to the finished
     // CCanvas once it exists. `seenIds` is a per-window set checked
     // against every resolved id - a duplicate is a hard error.
-    PWidget buildWidget(lua_State* L, int idx, int& autoId, std::vector<std::function<void()>>& bindings, std::unordered_set<std::string>& seenIds);
+    // `inheritedDebug` is this widget's ancestor-resolved `debug` state
+    // (mirrors resolveDebugSpec()'s cascade, computed once here instead
+    // of per-frame) - used for construction-time-only diagnostics.
+    PWidget buildWidget(lua_State* L, int idx, int& autoId, std::vector<std::function<void()>>& bindings, std::unordered_set<std::string>& seenIds, bool inheritedDebug = false);
 
 } // namespace HyprLUI::Lua
