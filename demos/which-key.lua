@@ -306,14 +306,15 @@ end
 --------------------------------------------------
 
 -- Single customization block for this demo. `yOffset`/`monitorPadding`
--- are window-level settings (the popup's own horizontal position offset,
--- and the spanned-width popup's left/right inset from the true monitor
--- edges - two independent things, not widget props), so they can't live
--- inside the component itself - kept here anyway so every user-facing
--- knob this demo exposes has exactly one place to edit. Everything else
--- here is passed straight through to the WhichKeyPopup component below
--- (defaults: Catppuccin Mocha, same palette as the eww reference's
--- eww.scss - base #1e1e2e, mauve #cba6f7, blue #89b4fa, peach #fac6a7).
+-- are window-level settings (the popup's own vertical offset up from the
+-- bottom anchor edge, and the spanned-width popup's left/right inset
+-- from the true monitor edges - two independent things, not widget
+-- props), so they can't live inside the component itself - kept here
+-- anyway so every user-facing knob this demo exposes has exactly one
+-- place to edit. Everything else here is passed straight through to the
+-- WhichKeyPopup component below (defaults: Catppuccin Mocha, same
+-- palette as the eww reference's eww.scss - base #1e1e2e, mauve
+-- #cba6f7, blue #89b4fa, peach #fac6a7).
 local CONFIG = {
 	yOffset = 0,
 	monitorPadding = 0,
