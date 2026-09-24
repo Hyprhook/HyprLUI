@@ -19,7 +19,14 @@ local M = {}
 -- concept - see DESIGN.md's own notes on this from when it came up
 -- designing the daemon side).
 
-local jsonDecode = require("./demos/jsondecode").decode
+-- See demos/which-key.lua's identical block for why this isn't a plain
+-- require("./demos/jsondecode") - that resolves relative to the MAIN
+-- CONFIG's own directory, not this file's, and breaks outside HyprLUI's
+-- own dev hyprlandd.lua (confirmed live via which-key.lua's own module-
+-- not-found failure).
+local scriptDir = debug.getinfo(1, "S").source:match("^@(.*/)")
+package.path = scriptDir .. "../?.lua;" .. package.path
+local jsonDecode = require("jsondecode").decode
 
 local WINDOW_NAME = "hyprlui_notification_stack"
 local SOCKET_PATH = os.getenv("HYPRLUI_NOTIFY_SOCKET")

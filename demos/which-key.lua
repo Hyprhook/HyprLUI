@@ -40,7 +40,18 @@ local M = {}
 --     we're purely reacting to an already-instant Hyprland-native event,
 --     not debouncing our own keystrokes.
 
-local jsonDecode = require("./demos/jsondecode").decode
+-- require("./demos/jsondecode") resolves relative to the MAIN CONFIG's
+-- own directory (ConfigManager.cpp's resolveRequirePath), not this
+-- file's - only happens to work in HyprLUI's own dev hyprlandd.lua
+-- (config root == repo root, right next to demos/), breaks for any real
+-- deployment that reaches this file through a separate
+-- globals.hyprlui_dir-style path instead (confirmed live - this is
+-- exactly how it broke). Locate jsondecode.lua relative to THIS file's
+-- own path instead, via debug.getinfo, so it resolves correctly either
+-- way.
+local scriptDir = debug.getinfo(1, "S").source:match("^@(.*/)")
+package.path = scriptDir .. "?.lua;" .. package.path
+local jsonDecode = require("jsondecode").decode
 
 local WHICH_KEY_WINDOW = "hyprlui_which_key"
 
