@@ -9,7 +9,7 @@ namespace HyprLUI::RenderHook {
     namespace {
         CHyprSignalListener g_renderListener;
 
-        void onRenderStage(eRenderStage stage) {
+        void                onRenderStage(eRenderStage stage) {
             // eRenderStage is Hyprland's own enum describing where in the
             // frame we are (declared in src/SharedDefs.hpp - values are
             // typically RENDER_PRE_WINDOWS, RENDER_PRE_WINDOW,
@@ -21,14 +21,16 @@ namespace HyprLUI::RenderHook {
                     // Drawn first, so windows/layers can render on top of it.
                     HyprLUI::CUIManager::get().renderBackground();
                     break;
-                case RENDER_LAST_MOMENT:
-                    // Drawn dead last, on top of everything (including
-                    // fullscreen surfaces) - matches how Hyprland draws its
-                    // own notifications. Right stage for HUD-style GUIs.
+                case RENDER_POST_WINDOWS:
+                    // NOT RENDER_LAST_MOMENT - that fires after Hyprland's
+                    // own cursor render, so we'd draw over the cursor
+                    // (confirmed live). This is the latest stage before
+                    // the cursor, traded off against firing before the
+                    // top/overlay layer-shell surfaces too - see
+                    // DESIGN.md's own note on the upstream fix this needs.
                     HyprLUI::CUIManager::get().renderOverlay();
                     break;
-                default:
-                    break;
+                default: break;
             }
         }
     } // namespace

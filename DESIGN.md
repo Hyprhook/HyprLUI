@@ -702,6 +702,26 @@ in full. Tracked here going forward instead of as numbered phases.
         pattern - this one was real and worth catching before a full
         rebuild.
 
+- [ ] **17. Overlay renders over the cursor** - found live running on real
+      hardware (nvidia, not the nested-Hyprland dev setup this project was
+      previously tested under, where it never showed up): `RenderHook.cpp`
+      hooked `RENDER_LAST_MOMENT`, which fires AFTER Hyprland's own cursor
+      render (`Renderer.cpp` - confirmed by reading the actual render-stage
+      emission order, not guessed), so every HyprLUI window drew on top of
+      the cursor whenever Hyprland falls back to software cursor rendering
+      (`CMonitor::shouldUseSoftwareCursors()` - true by default for nvidia
+      + multi-GPU/VRR, which is exactly this host). Switched the hook to
+      `RENDER_POST_WINDOWS` instead - the latest stage that still fires
+      before the cursor - fixing it, at the cost of now also firing before
+      the top/overlay `wlr-layer-shell` surfaces (waybar/eww etc., traced
+      via `renderAllClientsForWorkspace()`'s own render order), which
+      RENDER_LAST_MOMENT didn't have to worry about. No stage exists
+      upstream between "after top/overlay layer-shell surfaces" and
+      "before cursor" - a real fix needs a new Hyprland render stage there
+      (e.g. `RENDER_POST_CURSOR`, or splitting cursor render into its own
+      explicit stage boundary) - **needs a Hyprland PR**, tracked here
+      until that lands and HyprLUI can switch to it.
+
 ## Open questions
 
 Genuinely undecided, no concrete need forcing a decision yet - revisit if
