@@ -32,6 +32,10 @@ end
 local task1Window = nil -- resolved name of the open task-1 window, if any
 
 local function toggleTask1()
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+
 	if task1Window then
 		hl.plugin.hyprlui.remove_canvas(task1Window)
 		task1Window = nil
@@ -77,6 +81,10 @@ local TASK2_WINDOW = "hyprlui_task2_demo"
 local task2Open = false
 
 local function toggleTask2()
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+
 	if task2Open then
 		hl.plugin.hyprlui.remove_canvas(TASK2_WINDOW)
 		task2Open = false
@@ -142,6 +150,10 @@ local ICON_PATH = "/home/moritzgleissner/dev/HyprLUI/test-icon.png"
 local task4Open = false
 
 local function toggleTask4()
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+
 	if task4Open then
 		hl.plugin.hyprlui.remove_canvas(TASK4_WINDOW)
 		task4Open = false
@@ -263,6 +275,10 @@ local TASK6_WINDOW = "hyprlui_task6_demo"
 local task6Open = false
 
 local function toggleTask6()
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+
 	if task6Open then
 		hl.plugin.hyprlui.remove_canvas(TASK6_WINDOW)
 		task6Open = false
@@ -308,6 +324,10 @@ local TASK8_WINDOW = "hyprlui_task8_demo"
 local task8Open = false
 
 local function toggleTask8()
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+
 	if task8Open then
 		hl.plugin.hyprlui.remove_canvas(TASK8_WINDOW)
 		task8Open = false
@@ -370,6 +390,10 @@ local TASK16_WINDOW = "hyprlui_task16_demo"
 local task16Open = false
 
 local function toggleTask16()
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+
 	if task16Open then
 		hl.plugin.hyprlui.remove_canvas(TASK16_WINDOW)
 		task16Open = false
@@ -443,6 +467,10 @@ local TASK10_WINDOW = "hyprlui_task10_demo"
 local task10Open = false
 
 local function toggleTask10()
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+
 	if task10Open then
 		hl.plugin.hyprlui.remove_canvas(TASK10_WINDOW)
 		task10Open = false
@@ -469,6 +497,9 @@ local function toggleTask10()
 					h = 40,
 					color = 0xff313244,
 					onClick = function(button)
+						if hl.plugin.hyprlui == nil then
+							return
+						end
 						hl.plugin.hyprlui.set_text(TASK10_WINDOW, "result", "last click: " .. button)
 					end,
 					hl.plugin.hyprlui.Text({ x = 10, y = 10, text = "left/right/middle-click me", size = 12 }),
@@ -494,9 +525,15 @@ function M.test_binds()
 	hl.bind("ALT + SHIFT + 2", toggleTask2, { description = "task-checks: toggle task 2 demo (Box sizing)" })
 	hl.bind("ALT + SHIFT + 4", toggleTask4, { description = "task-checks: toggle task 4 demo (shared rect base)" })
 	hl.bind("ALT + SHIFT + 5", function()
+		if hl.plugin.hyprlui == nil then
+			return
+		end
 		hl.plugin.hyprlui.set_canvas_visible(TASK5_WINDOW, false)
 	end, { description = "task-checks: hide task 5 demo (hotReload)" })
 	hl.bind("ALT + SHIFT + 6", function()
+		if hl.plugin.hyprlui == nil then
+			return
+		end
 		hl.plugin.hyprlui.set_canvas_visible(TASK5_WINDOW, true)
 	end, { description = "task-checks: show task 5 demo (hotReload)" })
 	hl.bind("ALT + SHIFT + 3", toggleTask6, { description = "task-checks: toggle task 6 demo (monitor-span sizing)" })

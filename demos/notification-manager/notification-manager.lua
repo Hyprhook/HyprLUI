@@ -177,12 +177,30 @@ end
 
 -- Idempotent - a click-dismiss racing an already-fired auto-dismiss
 -- timer (or vice versa) just no-ops the second call, not an error.
+--
+-- Reached from async contexts (a hl.timer dwell callback, the daemon
+-- socket's "closed" event, a card's onClick) that can still fire after
+-- hl.plugin.hyprlui goes away mid-flight - e.g. the plugin binary itself
+-- getting rebuilt/reloaded while a dwell timer is pending, not just the
+-- Lua config reloading (which reuses the same still-live plugin). Same
+-- guard + pcall discipline as every other hl.plugin.hyprlui call site in
+-- this file/demos/which-key.lua - unguarded here would otherwise raise
+-- straight out of a timer/socket callback with no pcall boundary above
+-- it in the Lua call stack.
 function M.dismiss(id)
 	if not liveIds[id] then
 		return
 	end
 	liveIds[id] = nil
-	hl.plugin.hyprlui.remove_widget(WINDOW_NAME, "card_" .. id)
+
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+
+	local ok, err = pcall(hl.plugin.hyprlui.remove_widget, WINDOW_NAME, "card_" .. id)
+	if not ok then
+		warn("hyprlui.remove_widget (notification-manager)", err)
+	end
 end
 
 --------------------------------------------------
