@@ -17,6 +17,10 @@ local M = {}
 -- card actually fire: a freshly-rebuilt-every-frame widget never had a
 -- "just became visible"/"just moved" transition to animate in the first
 -- place.
+--
+-- Customization follows demos/which-key.lua's own CONFIG/M.setup(opts)
+-- convention - see its own header comment for why (a single place to
+-- edit, re-evaluated fresh from scratch on every config reload).
 
 -- require("./demos/jsondecode") resolves relative to the MAIN CONFIG's
 -- own directory, not this file's - breaks outside HyprLUI's own dev
@@ -28,32 +32,51 @@ package.path = scriptDir .. "../?.lua;" .. package.path
 local jsonDecode = require("jsondecode").decode
 
 local WINDOW_NAME = "hyprlui_notification_stack"
-local SOCKET_PATH = os.getenv("HYPRLUI_NOTIFY_SOCKET")
-	or (os.getenv("XDG_RUNTIME_DIR") or "/tmp") .. "/hyprlui-notifications.sock"
-local CARD_WIDTH = 320
 
--- urgency (spec: 0=low, 1=normal, 2=critical) -> accent color + default
--- dwell time when the sender didn't request a specific expire_timeout.
--- 5s/8s/forever mirrors the convention most status-bar toast stacks use.
-local URGENCY = {
-	[0] = { color = 0xff6c7086, timeout = 5000 },
-	[1] = { color = 0xff89b4fa, timeout = 8000 },
-	[2] = { color = 0xfff38ba8, timeout = nil },
+-- Single customization block for this demo - see demos/which-key.lua's
+-- own CONFIG for the same convention. `animationIn`/`animationOut`/
+-- `animationLayout` default to nil (instant, no animation at all -
+-- matching CWidget's own "field not set = disabled" default) rather
+-- than shipping some default transition - see M.setup()'s own note on
+-- this if you want the bouncy stress-test version back (that's how the
+-- reflow-ghosting bug in TASKS.md's task 2 actually got caught).
+local CONFIG = {
+	socketPath = os.getenv("HYPRLUI_NOTIFY_SOCKET")
+		or (os.getenv("XDG_RUNTIME_DIR") or "/tmp") .. "/hyprlui-notifications.sock",
+
+	anchor = "top-right",
+	xOffset = 16,
+	yOffset = 16,
+
+	cardWidth = 320,
+	gap = 8,
+
+	bgColor = 0xff1e1e2e,
+	titleColor = 0xffcdd6f4,
+	bodyColor = 0xffa6adc8,
+	font = "sans",
+	titleSize = 13,
+	bodySize = 12,
+	rounding = 8,
+	borderWidth = 2,
+
+	-- urgency (spec: 0=low, 1=normal, 2=critical) -> accent color +
+	-- default dwell time when the sender didn't request a specific
+	-- expire_timeout. 5s/8s/forever mirrors the convention most status-
+	-- bar toast stacks use. `nil` timeout = never auto-dismiss.
+	urgency = {
+		[0] = { color = 0xff6c7086, timeout = 5000 },
+		[1] = { color = 0xff89b4fa, timeout = 8000 },
+		[2] = { color = 0xfff38ba8, timeout = nil },
+	},
+
+	animationIn = nil,
+	animationOut = nil,
+	animationLayout = nil,
 }
 
 local liveIds = {} -- set of notification ids currently rendered as a card
 local windowCreated = false
-
--- Deliberately slower + a bouncy spring (real overshoot, not just a
--- smooth ease) instead of a quick plain fade - stress-tests the damage/
--- positioning machinery harder, since content spends longer near (and
--- past, on the overshoot) its final bounds instead of snapping through
--- it in a couple of frames. This is how the reflow-ghosting bug (see
--- TASKS.md task 2) actually got caught - keep it this obvious for now.
-hl.curve("hyprlui_notification_bounce", { type = "spring", stiffness = 120, dampening = 8, mass = 1 })
-local CARD_ANIM_IN = { speed = 6, spring = "hyprlui_notification_bounce", style = "slide right" }
-local CARD_ANIM_OUT = { speed = 6, spring = "hyprlui_notification_bounce", style = "slide right" }
-local CARD_ANIM_LAYOUT = { speed = 8, spring = "hyprlui_notification_bounce" }
 
 local function warn(label, err)
 	hl.notification.create({ text = label .. " failed: " .. tostring(err), timeout = 3000 })
@@ -72,10 +95,10 @@ local function ensureWindow()
 	local ok, err = pcall(function()
 		hl.plugin.hyprlui.window({
 			name = WINDOW_NAME,
-			anchor = "top-right",
-			x = 16,
-			y = 16,
-			hl.plugin.hyprlui.Column({ id = "root", gap = 8 }),
+			anchor = CONFIG.anchor,
+			x = CONFIG.xOffset,
+			y = CONFIG.yOffset,
+			hl.plugin.hyprlui.Column({ id = "root", gap = CONFIG.gap }),
 		})
 	end)
 	if not ok then
@@ -92,6 +115,7 @@ end
 local function addCard(n)
 	local title = n.appName ~= "" and (n.appName .. ": " .. n.summary) or n.summary
 	local id = n.id
+	local maxW = CONFIG.cardWidth - 24
 
 	local ok, err = pcall(function()
 		hl.plugin.hyprlui.add_widget(
@@ -99,24 +123,24 @@ local function addCard(n)
 			"root",
 			hl.plugin.hyprlui.Stack({
 				id = "card_" .. id,
-				w = CARD_WIDTH,
+				w = CONFIG.cardWidth,
 				h = 64,
-				animationIn = CARD_ANIM_IN,
-				animationOut = CARD_ANIM_OUT,
+				animationIn = CONFIG.animationIn,
+				animationOut = CONFIG.animationOut,
 				-- Lets THIS card slide smoothly into a new slot when a
 				-- sibling above it is dismissed, instead of snapping -
 				-- animationOut (above, on the card actually being
 				-- removed) stopping its own layout space immediately is
 				-- what makes that reflow start at the same time as the
 				-- dismissed card's own fade-out, not after it.
-				animationLayout = CARD_ANIM_LAYOUT,
+				animationLayout = CONFIG.animationLayout,
 				hl.plugin.hyprlui.Box({
 					id = "bg_" .. id,
 					fill = true,
-					color = 0xff1e1e2e,
-					rounding = 8,
+					color = CONFIG.bgColor,
+					rounding = CONFIG.rounding,
 					borderColor = n.color,
-					borderWidth = 2,
+					borderWidth = CONFIG.borderWidth,
 					onClick = function()
 						M.dismiss(id)
 					end,
@@ -126,18 +150,20 @@ local function addCard(n)
 					x = 12,
 					y = 8,
 					text = title,
-					maxW = CARD_WIDTH - 24,
-					size = 13,
-					color = 0xffcdd6f4,
+					maxW = maxW,
+					size = CONFIG.titleSize,
+					font = CONFIG.font,
+					color = CONFIG.titleColor,
 				}),
 				hl.plugin.hyprlui.Text({
 					id = "body_" .. id,
 					x = 12,
 					y = 30,
 					text = n.body,
-					maxW = CARD_WIDTH - 24,
-					size = 12,
-					color = 0xffa6adc8,
+					maxW = maxW,
+					size = CONFIG.bodySize,
+					font = CONFIG.font,
+					color = CONFIG.bodyColor,
 				}),
 			})
 		)
@@ -164,7 +190,7 @@ end
 --------------------------------------------------
 local function handleNotify(event)
 	local urgency = (event.hints and event.hints.urgency) or 1
-	local style = URGENCY[urgency] or URGENCY[1]
+	local style = CONFIG.urgency[urgency] or CONFIG.urgency[1]
 
 	local dwellMs
 	if event.expireTimeout and event.expireTimeout > 0 then
@@ -245,20 +271,64 @@ local function startReadLoop(sock)
 	sock:read(onData)
 end
 
--- Call once after require()'ing this module, same convention
--- demos/which-key.lua's own M.setup() uses - re-call on every config
--- reload (the whole script re-runs then anyway, so this reconnects
--- fresh each time rather than needing any reconnect-on-drop logic of
--- its own).
-function M.setup()
+-- Call any time after require()'ing this module - same convention
+-- demos/which-key.lua's own M.setup(opts) uses. Re-call on every config
+-- reload (the whole script re-runs then anyway, so CONFIG's own defaults
+-- above already reset themselves - this just reconnects the socket
+-- fresh, same as before).
+--
+-- Every CONFIG field is a plain scalar override EXCEPT `urgency`, which
+-- merges per-level/per-field into the existing defaults instead of
+-- replacing the whole table - `opts.urgency = { [2] = { color = ... } }`
+-- only changes critical's color, low/normal and critical's own timeout
+-- stay at their built-in defaults. `animationIn`/`animationOut`/
+-- `animationLayout` are the one exception to "merge" - those replace
+-- whole-table, matching animationIn/animationOut's own documented
+-- behavior elsewhere ("self-contained, not a partial merge").
+function M.setup(opts)
+	opts = opts or {}
+
+	for _, key in ipairs({
+		"socketPath",
+		"anchor",
+		"xOffset",
+		"yOffset",
+		"cardWidth",
+		"gap",
+		"bgColor",
+		"titleColor",
+		"bodyColor",
+		"font",
+		"titleSize",
+		"bodySize",
+		"rounding",
+		"borderWidth",
+		"animationIn",
+		"animationOut",
+		"animationLayout",
+	}) do
+		if opts[key] ~= nil then
+			CONFIG[key] = opts[key]
+		end
+	end
+
+	if opts.urgency then
+		for level, fields in pairs(opts.urgency) do
+			CONFIG.urgency[level] = CONFIG.urgency[level] or {}
+			for field, value in pairs(fields) do
+				CONFIG.urgency[level][field] = value
+			end
+		end
+	end
+
 	liveIds = {}
 	windowCreated = false
 	if hl.plugin.hyprlui ~= nil then
-		hl.plugin.hyprlui.open_socket(SOCKET_PATH, function(sock)
+		hl.plugin.hyprlui.open_socket(CONFIG.socketPath, function(sock)
 			if not sock then
 				warn(
 					"hyprlui notification-manager",
-					"could not connect to " .. SOCKET_PATH .. " - is notification-daemon.service running?"
+					"could not connect to " .. CONFIG.socketPath .. " - is notification-daemon.service running?"
 				)
 				return
 			end
