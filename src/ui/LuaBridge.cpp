@@ -654,6 +654,13 @@ namespace HyprLUI::Lua {
             for (auto& b : bindings)
                 canvas->addBinding(std::move(b));
 
+            // Primed hidden first, same as window{}'s own root - a plain
+            // setVisible(true) alone would have nothing to animate FROM,
+            // so animationIn would never fire (child built via buildWidget()
+            // starts m_visible=true already, unlike a fresh window root).
+            child->primeHidden();
+            child->setVisible(true);
+
             parent->addChild(std::move(child));
             canvas->damage();
             return 0;
