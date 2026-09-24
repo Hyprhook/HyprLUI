@@ -1,6 +1,13 @@
 project('HyprLUI', 'cpp',
   version: '0.1',
-  default_options: ['buildtype=release'],
+  # 'debugoptimized' (-O2 -g) instead of 'release' (-O3, no debug info) -
+  # a crash report is useless without this: without -g, a backtrace is
+  # just raw offsets into whichever exported symbol happens to be
+  # nearest (an unexported lambda gets folded into its enclosing
+  # function's own symbol with no way to tell them apart), not an actual
+  # file:line. Cost is a bit of binary size and -O2 vs -O3, not worth
+  # trading away the ability to actually root-cause a crash.
+  default_options: ['buildtype=debugoptimized'],
 )
 
 cpp_compiler = meson.get_compiler('cpp')

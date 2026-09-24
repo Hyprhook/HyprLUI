@@ -226,7 +226,10 @@ end
 --------------------------------------------------
 -- HyprLUI-side consumers connect here (as clients - see docs/api.md's
 -- open_socket()) and receive one JSON line per event: {type="notify",
--- ...} or {type="closed", id=..., reason=...}.
+-- ...} or {type="closed", id=..., reason=...}. Bidirectional since
+-- action buttons: a client can also WRITE a {type="action", id=,
+-- key=...} line back (see decodeActionMessage()/pollClients() below),
+-- reported to the original sender as a real ActionInvoked D-Bus signal.
 os.remove(SOCKET_PATH)
 local server = assert(unix())
 assert(server:bind(SOCKET_PATH))
@@ -253,6 +256,62 @@ local function broadcast(event)
 	for i = #clients, 1, -1 do
 		local ok = clients[i]:send(line)
 		if not ok then
+			clients[i]:close()
+			table.remove(clients, i)
+		end
+	end
+end
+
+-- Tiny targeted extractor for the ONE message shape the UI ever sends
+-- back over this socket (a flat {"type":"action","id":<num>,"key":"..."}
+-- object, written by notification-manager.lua's own sendAction()) - not
+-- a general JSON parser, same minimalism as jsonEncode() above just in
+-- the other direction. sendAction() quotes `key` with Lua's %q, which
+-- this simple pattern can't fully unescape (embedded quotes/control
+-- chars) - acceptable, action keys are spec-conventional plain
+-- identifiers in practice, not user-facing text.
+local function decodeActionMessage(line)
+	if not line:match('"type"%s*:%s*"action"') then
+		return nil
+	end
+	local id = tonumber(line:match('"id"%s*:%s*(%-?%d+)'))
+	local key = line:match('"key"%s*:%s*"([^"]*)"')
+	if not id or not key then
+		return nil
+	end
+	return { id = id, key = key }
+end
+
+-- ActionInvoked per the Notifications spec: (u,s) = the notification id,
+-- the action key the user picked. Same broadcast-signal shape as
+-- CloseNotification's NotificationClosed below - no destination, the
+-- original sender matches it against the id it got back from its own
+-- Notify() call.
+local function sendActionInvoked(id, key)
+	local signal =
+		ldbus.message.new_signal("/org/freedesktop/Notifications", "org.freedesktop.Notifications", "ActionInvoked")
+	local sIter = signal:iter_init_append()
+	sIter:append_basic(id, ldbus.basic_types.uint32)
+	sIter:append_basic(key, ldbus.basic_types.string)
+	conn:send(signal)
+end
+
+-- One receive() attempt per client per tick - action clicks are rare,
+-- user-paced events, no need to drain a backlog aggressively the way
+-- acceptPending() does for new connections. LuaSocket's own
+-- receive("*l") already buffers a partial line across calls internally,
+-- so this doesn't need its own buffer/reassembly the way the UI-side
+-- onData() does for hyprlui.open_socket()'s raw (non-line-buffered)
+-- :read().
+local function pollClients()
+	for i = #clients, 1, -1 do
+		local line, err = clients[i]:receive("*l")
+		if line then
+			local msg = decodeActionMessage(line)
+			if msg then
+				sendActionInvoked(msg.id, msg.key)
+			end
+		elseif err == "closed" then
 			clients[i]:close()
 			table.remove(clients, i)
 		end
@@ -355,12 +414,13 @@ local handlers = {
 ---- main loop ----
 --------------------------------------------------
 -- Polls D-Bus (conn:read_write, non-blocking with a short timeout) and
--- the notification socket (non-blocking accept/broadcast) in the same
--- loop - a short sleep only when NEITHER had anything, so this doesn't
--- busy-spin the CPU while idle.
+-- the notification socket (non-blocking accept/broadcast/read-back for
+-- action clicks) in the same loop - a short sleep only when NEITHER had
+-- anything, so this doesn't busy-spin the CPU while idle.
 while true do
 	conn:read_write(20)
 	acceptPending()
+	pollClients()
 
 	local msg = conn:pop_message()
 	local hadWork = msg ~= nil

@@ -62,6 +62,16 @@ local CONFIG = {
 	rounding = 8,
 	borderWidth = 2,
 
+	-- action buttons (Notify's `actions` array) - wrapped into rows of
+	-- actionsPerRow (more than that per row and each button gets too
+	-- narrow to read), only reserved on cards that actually have any.
+	actionsPerRow = 2,
+	actionRowHeight = 28,
+	actionGap = 6,
+	actionButtonColor = 0xff313244,
+	actionTextColor = 0xffcdd6f4,
+	actionTextSize = 12,
+
 	-- urgency (spec: 0=low, 1=normal, 2=critical) -> accent color +
 	-- default dwell time when the sender didn't request a specific
 	-- expire_timeout. 5s/8s/forever mirrors the convention most status-
@@ -79,9 +89,24 @@ local CONFIG = {
 
 local liveIds = {} -- set of notification ids currently rendered as a card
 local windowCreated = false
+local currentSock = nil -- the live daemon connection, if any - set in startReadLoop(), cleared on disconnect (see "socket connection" section below)
 
 local function warn(label, err)
 	hl.notification.create({ text = label .. " failed: " .. tostring(err), timeout = 3000 })
+end
+
+-- Tells the daemon the user picked an action button - it relays this to
+-- the ORIGINAL sending app as a real ActionInvoked D-Bus signal (see
+-- decodeActionMessage()/sendActionInvoked() in the daemon). Silently
+-- no-ops if the socket isn't currently connected, matching this file's
+-- own "outages self-heal, don't block on them" stance elsewhere (see
+-- connect()'s own doc comment) rather than erroring - the button click
+-- itself still dismisses the card either way (see addCard()).
+local function sendAction(id, key)
+	if not currentSock then
+		return
+	end
+	currentSock:write(string.format('{"type":"action","id":%d,"key":%q}\n', id, key))
 end
 
 --------------------------------------------------
@@ -215,12 +240,22 @@ local function addCard(n)
 	local hasIcon = n.iconPath ~= nil or n.iconPixels ~= nil
 	local textX = hasIcon and (12 + CONFIG.iconSize + CONFIG.iconGap) or 12
 	local maxW = CONFIG.cardWidth - textX - 12
+	-- n.actions is Notify's own flat [key1, label1, key2, label2, ...]
+	-- shape (freedesktop Notifications spec) - every entry rendered as a
+	-- button uniformly, including a sender's "default" key if it sends
+	-- one (some desktop notification servers treat "default" specially -
+	-- invoked on a body click instead of shown as its own button - not
+	-- done here, keeps every action key on equal footing rather than
+	-- inventing a hidden special case nobody asked for).
+	local hasActions = n.actions ~= nil and #n.actions > 0
+	local numActionRows = hasActions and math.ceil((#n.actions / 2) / CONFIG.actionsPerRow) or 0
+	local cardHeight = 64 + numActionRows * CONFIG.actionRowHeight + math.max(0, numActionRows - 1) * CONFIG.actionGap
 
 	local ok, err = pcall(function()
 		local spec = {
 			id = "card_" .. id,
 			w = CONFIG.cardWidth,
-			h = 64,
+			h = cardHeight,
 			animationIn = CONFIG.animationIn,
 			animationOut = CONFIG.animationOut,
 			-- Lets THIS card slide smoothly into a new slot when a
@@ -285,6 +320,57 @@ local function addCard(n)
 				color = CONFIG.bodyColor,
 			})
 		)
+		if hasActions then
+			-- Wrapped into rows of CONFIG.actionsPerRow rather than one
+			-- long Row - past a couple of buttons, evenly dividing the
+			-- card's own width among all of them at once makes each one
+			-- too narrow to read. Each row's buttons only divide THAT
+			-- row's width among themselves, so a leftover last row (e.g.
+			-- 3 actions at actionsPerRow=2 -> a lone 3rd button) goes
+			-- full-width instead of matching the earlier rows' narrower
+			-- width for no real reason.
+			local rowWidth = CONFIG.cardWidth - 24
+			local actionIndex = 0
+			for i = 1, #n.actions, 2 * CONFIG.actionsPerRow do
+				local remainingPairs = (#n.actions - i + 1) / 2
+				local rowActionCount = math.min(CONFIG.actionsPerRow, remainingPairs)
+				local btnWidth = (rowWidth - (rowActionCount - 1) * CONFIG.actionGap) / rowActionCount
+				local rowIndex = actionIndex / CONFIG.actionsPerRow
+				local row = {
+					id = "actions_" .. id .. "_" .. rowIndex,
+					x = 12,
+					y = 64 + rowIndex * (CONFIG.actionRowHeight + CONFIG.actionGap),
+					gap = CONFIG.actionGap,
+				}
+				for j = i, math.min(i + 2 * CONFIG.actionsPerRow - 1, #n.actions), 2 do
+					local key, label = n.actions[j], n.actions[j + 1]
+					table.insert(
+						row,
+						hl.plugin.hyprlui.Button({
+							id = "action_" .. id .. "_" .. j,
+							w = btnWidth,
+							h = CONFIG.actionRowHeight - 6,
+							color = CONFIG.actionButtonColor,
+							rounding = 4,
+							onClick = function()
+								sendAction(id, key)
+								M.dismiss(id)
+							end,
+							hl.plugin.hyprlui.Text({
+								x = 8,
+								y = 4,
+								text = label,
+								size = CONFIG.actionTextSize,
+								font = CONFIG.font,
+								color = CONFIG.actionTextColor,
+							}),
+						})
+					)
+				end
+				table.insert(spec, hl.plugin.hyprlui.Row(row))
+				actionIndex = actionIndex + CONFIG.actionsPerRow
+			end
+		end
 
 		hl.plugin.hyprlui.add_widget(WINDOW_NAME, "root", hl.plugin.hyprlui.Stack(spec))
 	end)
@@ -348,6 +434,13 @@ local function handleNotify(event)
 		M.dismiss(event.id)
 	end
 
+	-- Actionable notifications don't auto-dismiss on the usual per-urgency
+	-- schedule - a 5-8s default timeout isn't much time to read two
+	-- buttons and decide, and most desktop notification systems (e.g.
+	-- GNOME) treat this the same way. Still dismissible by clicking the
+	-- card body or an action button itself (see addCard()).
+	local hasActions = event.actions ~= nil and #event.actions > 0
+
 	local function finish(iconPath, iconPixels)
 		addCard({
 			id = event.id,
@@ -357,9 +450,10 @@ local function handleNotify(event)
 			color = style.color,
 			iconPath = iconPath,
 			iconPixels = iconPixels,
+			actions = event.actions,
 		})
 
-		if dwellMs then
+		if dwellMs and not hasActions then
 			hl.timer(function()
 				M.dismiss(event.id)
 			end, { timeout = dwellMs, type = "oneshot" })
@@ -446,9 +540,11 @@ local connect
 -- and splits on "\n" itself rather than assuming line-sized chunks.
 local function startReadLoop(sock)
 	local buffer = ""
+	currentSock = sock
 
 	local function onData(chunk)
 		if not chunk then
+			currentSock = nil
 			warnDisconnectedOnce("daemon connection closed")
 			hl.timer(connect, { timeout = RECONNECT_DELAY_MS, type = "oneshot" })
 			return
@@ -533,6 +629,12 @@ function M.setup(opts)
 		"bodySize",
 		"rounding",
 		"borderWidth",
+		"actionsPerRow",
+		"actionRowHeight",
+		"actionGap",
+		"actionButtonColor",
+		"actionTextColor",
+		"actionTextSize",
 		"animationIn",
 		"animationOut",
 		"animationLayout",
@@ -554,6 +656,7 @@ function M.setup(opts)
 	liveIds = {}
 	windowCreated = false
 	warnedDisconnected = false
+	currentSock = nil
 	connect()
 end
 

@@ -187,8 +187,55 @@ HyprLUI's own active task list.
       #4b raw pixel buffer).
 - [ ] Smooth per-card fade-in/out and reflow on dismiss - blocked by #1/#2.
 - [ ] Multi-line body text - blocked by #3 (or work around with marquee).
-- [ ] Action buttons (`Notify`'s `actions` array - already forwarded by
-      the daemon, just unused by the UI) - not blocked.
+- [x] Action buttons (`Notify`'s `actions` array). Two gaps closed, not
+      one - the daemon only ever forwarded `actions` one-way (daemon ->
+      UI); making a click actually mean something to the ORIGINAL
+      sending app needed a way back:
+      - **Daemon** (`daemon/notification-daemon.lua`): the client
+        socket was write-only (`broadcast()` only, no client read loop
+        at all). New `pollClients()` (hooked into the main loop
+        alongside `acceptPending()`) does one non-blocking
+        `receive("*l")` per connected client per tick - action clicks
+        are rare/user-paced, no need to drain a backlog the way
+        `acceptPending()` does for new connections. LuaSocket's own
+        `receive("*l")` already buffers a partial line across calls
+        internally, unlike `hyprlui.open_socket()`'s raw `:read()` on
+        the UI side (which is why `onData()` there does its own
+        buffering). New `decodeActionMessage()` is a tiny targeted
+        3-field extractor for the ONE message shape the UI ever sends
+        back (`{"type":"action","id":,"key":}`) - not a general JSON
+        parser, same minimalism as `jsonEncode()` in the other
+        direction; can't unescape embedded quotes in `key`, accepted
+        since action keys are spec-conventional plain identifiers, not
+        user-facing text. New `sendActionInvoked(id, key)` mirrors
+        `CloseNotification`'s existing `NotificationClosed` signal-send
+        exactly - same broadcast-signal-no-destination shape, sender
+        matches it against the id its own `Notify()` call returned.
+      - **UI** (`notification-manager.lua`): `addCard()` renders
+        `n.actions` (Notify's flat `[key1, label1, key2, label2, ...]`)
+        as a `Row` of `Button`s below the body text - every key gets a
+        button uniformly, including a sender's "default" key if it
+        sends one (some servers treat "default" specially - invoked on
+        a body click instead of shown as its own button; not done here,
+        deliberately - no hidden special case nobody asked for). Card
+        height grows by `CONFIG.actionRowHeight` only when actions are
+        actually present. New module-level `currentSock` (set in
+        `startReadLoop()`, cleared on disconnect) lets a button's
+        `onClick` - built long after `connect()` ran - reach whichever
+        connection is live right now, since a reconnect could happen in
+        between; `sendAction()` silently no-ops during an outage rather
+        than erroring, matching `connect()`'s own established
+        outages-self-heal stance.
+      - Confirmed with the user: actionable notifications skip the
+        normal per-urgency auto-dismiss entirely (most desktop
+        notification systems, e.g. GNOME, do the same - a 5-8s default
+        timeout isn't much time to read two buttons and decide) -
+        still dismissible via the body click or an action button
+        itself, which also fires `sendAction()` before dismissing.
+      - Verified `CWidget::hitTest()` (paint-order-reversed,
+        first-match-wins) before building this - a `Button` added as a
+        later `Stack` sibling correctly claims a click over the card's
+        full-body dismiss `Box` underneath it, no double-fire risk.
 - [ ] Hover-to-pause the auto-dismiss timer (`onHoverStart`/`onHoverEnd`
       already exist) - not blocked.
 - [ ] Overflow handling ("+N more" once the stack gets tall) - not
