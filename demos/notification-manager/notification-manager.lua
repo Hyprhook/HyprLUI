@@ -50,6 +50,8 @@ local CONFIG = {
 
 	cardWidth = 320,
 	gap = 8,
+	iconSize = 32,
+	iconGap = 8,
 
 	bgColor = 0xff1e1e2e,
 	titleColor = 0xffcdd6f4,
@@ -83,6 +85,96 @@ local function warn(label, err)
 end
 
 --------------------------------------------------
+---- icon resolution ----
+--------------------------------------------------
+-- app_icon (freedesktop Notifications spec) is either an absolute path
+-- (handled directly, no lookup needed) or a bare icon-theme name like
+-- "firefox"/"dialog-warning" - resolving THAT means walking the
+-- installed icon themes ourselves; neither HyprLUI nor Hyprland has any
+-- such facility built in. Deliberately NOT full XDG icon-theme-spec
+-- compliant (no index.theme parsing, no theme inheritance, no
+-- size/scale matching) - just a recursive filename search across every
+-- installed theme (plus the flat /usr/share/pixmaps fallback the spec
+-- itself carves out for legacy apps), first match wins. Good enough to
+-- find most real icons; a demo, not a spec-compliant icon loader.
+--
+-- hints["image-data"] (TASKS.md task 4b) - a raw ARGB32 pixel buffer
+-- some senders (Vesktop/Discord confirmed) use instead of app_icon -
+-- is NOT handled by this function at all. It needs no path/theme-name
+-- resolution (the daemon already hands over the decoded bytes directly)
+-- so handleNotify() branches around resolveIcon() entirely for that
+-- case - see its own comment.
+local function iconSearchDirs()
+	local home = os.getenv("HOME") or ""
+	local dataHome = os.getenv("XDG_DATA_HOME") or (home .. "/.local/share")
+	local dataDirs = os.getenv("XDG_DATA_DIRS") or "/usr/local/share:/usr/share"
+
+	local dirs = { dataHome .. "/icons", home .. "/.icons" }
+	for dir in dataDirs:gmatch("[^:]+") do
+		table.insert(dirs, dir .. "/icons")
+	end
+	table.insert(dirs, "/usr/share/pixmaps")
+
+	-- Single-quoted for the shell command resolveIcon() below builds -
+	-- these come from env vars, not the (untrusted, comes off the
+	-- session bus) icon name itself, but quoting defensively costs
+	-- nothing and correctly handles a space in e.g. $HOME.
+	for i, dir in ipairs(dirs) do
+		dirs[i] = "'" .. dir:gsub("'", [['\'']]) .. "'"
+	end
+	return table.concat(dirs, " ")
+end
+local ICON_SEARCH_DIRS = iconSearchDirs()
+
+-- Freedesktop icon names are conventionally reverse-DNS-like identifiers
+-- - letters/digits/._- only. Doubles as the actual defense here: `name`
+-- comes off the session bus (any local process can send a Notify() call)
+-- and gets shell-interpolated into a `find` command below, so anything
+-- outside this allowlist is rejected outright rather than escaped.
+local ICON_NAME_PATTERN = "^[%w_.-]+$"
+
+local iconCache = {} -- appIcon name -> resolved path, or "" for "looked up, not found"
+
+-- Resolves `appIcon` to a usable Image `path` and calls cb(path|nil).
+-- Async (shells out to `find` via hl.plugin.hyprlui.run_cmd - NativeServices'
+-- own polling-based non-blocking I/O, not a blocking io.popen(), which
+-- would stall the compositor while the search runs) except for the
+-- already-a-path and already-cached cases, which call back immediately.
+local function resolveIcon(appIcon, cb)
+	if not appIcon or appIcon == "" then
+		cb(nil)
+		return
+	end
+	if appIcon:sub(1, 1) == "/" then
+		cb(appIcon) -- already a path - Image{} fails gracefully (fill+border, no crash) if it turns out not to exist
+		return
+	end
+	if iconCache[appIcon] ~= nil then
+		cb(iconCache[appIcon] ~= "" and iconCache[appIcon] or nil)
+		return
+	end
+	if not appIcon:match(ICON_NAME_PATTERN) or hl.plugin.hyprlui == nil then
+		iconCache[appIcon] = "" -- cache the miss so a malformed/adversarial name isn't re-checked every notification
+		cb(nil)
+		return
+	end
+
+	local quoted = "'" .. appIcon .. "'" -- safe: ICON_NAME_PATTERN above already rejected anything but [%w_.-]
+	local cmd = "find "
+		.. ICON_SEARCH_DIRS
+		.. " -iname "
+		.. quoted
+		.. ".svg -o -iname "
+		.. quoted
+		.. ".png 2>/dev/null | head -n1"
+	hl.plugin.hyprlui.run_cmd(cmd, function(output)
+		local path = (output or ""):gsub("%s+$", "")
+		iconCache[appIcon] = path
+		cb(path ~= "" and path or nil)
+	end)
+end
+
+--------------------------------------------------
 ---- window/card lifecycle ----
 --------------------------------------------------
 -- The window itself is created once, empty, and never rebuilt - only
@@ -108,65 +200,93 @@ local function ensureWindow()
 	windowCreated = true
 end
 
--- Card layout: a Stack with the Box (background/border/click target)
--- and the two Text labels as SIBLINGS, not nested inside the Box - Box
--- never renders children (only Button/Input do, see docs/api.md's own
--- note on this, found the hard way building demos/task-checks.lua).
+-- Card layout: a Stack with the Box (background/border/click target),
+-- optional icon Image, and the two Text labels as SIBLINGS, not nested
+-- inside the Box - Box never renders children (only Button/Input do,
+-- see docs/api.md's own note on this, found the hard way building
+-- demos/task-checks.lua). The icon (n.iconPath from resolveIcon(), or
+-- n.iconPixels straight off hints["image-data"] - handleNotify() only
+-- ever sets one of the two) shifts the text column over when present
+-- rather than overlapping it; omitted entirely when there is no icon,
+-- keeping the original layout for that case.
 local function addCard(n)
 	local title = n.appName ~= "" and (n.appName .. ": " .. n.summary) or n.summary
 	local id = n.id
-	local maxW = CONFIG.cardWidth - 24
+	local hasIcon = n.iconPath ~= nil or n.iconPixels ~= nil
+	local textX = hasIcon and (12 + CONFIG.iconSize + CONFIG.iconGap) or 12
+	local maxW = CONFIG.cardWidth - textX - 12
 
 	local ok, err = pcall(function()
-		hl.plugin.hyprlui.add_widget(
-			WINDOW_NAME,
-			"root",
-			hl.plugin.hyprlui.Stack({
-				id = "card_" .. id,
-				w = CONFIG.cardWidth,
-				h = 64,
-				animationIn = CONFIG.animationIn,
-				animationOut = CONFIG.animationOut,
-				-- Lets THIS card slide smoothly into a new slot when a
-				-- sibling above it is dismissed, instead of snapping -
-				-- animationOut (above, on the card actually being
-				-- removed) stopping its own layout space immediately is
-				-- what makes that reflow start at the same time as the
-				-- dismissed card's own fade-out, not after it.
-				animationLayout = CONFIG.animationLayout,
-				hl.plugin.hyprlui.Box({
-					id = "bg_" .. id,
-					fill = true,
-					color = CONFIG.bgColor,
-					rounding = CONFIG.rounding,
-					borderColor = n.color,
-					borderWidth = CONFIG.borderWidth,
-					onClick = function()
-						M.dismiss(id)
-					end,
-				}),
-				hl.plugin.hyprlui.Text({
-					id = "summary_" .. id,
-					x = 12,
-					y = 8,
-					text = title,
-					maxW = maxW,
-					size = CONFIG.titleSize,
-					font = CONFIG.font,
-					color = CONFIG.titleColor,
-				}),
-				hl.plugin.hyprlui.Text({
-					id = "body_" .. id,
-					x = 12,
-					y = 30,
-					text = n.body,
-					maxW = maxW,
-					size = CONFIG.bodySize,
-					font = CONFIG.font,
-					color = CONFIG.bodyColor,
-				}),
+		local spec = {
+			id = "card_" .. id,
+			w = CONFIG.cardWidth,
+			h = 64,
+			animationIn = CONFIG.animationIn,
+			animationOut = CONFIG.animationOut,
+			-- Lets THIS card slide smoothly into a new slot when a
+			-- sibling above it is dismissed, instead of snapping -
+			-- animationOut (above, on the card actually being removed)
+			-- stopping its own layout space immediately is what makes
+			-- that reflow start at the same time as the dismissed
+			-- card's own fade-out, not after it.
+			animationLayout = CONFIG.animationLayout,
+		}
+		table.insert(
+			spec,
+			hl.plugin.hyprlui.Box({
+				id = "bg_" .. id,
+				fill = true,
+				color = CONFIG.bgColor,
+				rounding = CONFIG.rounding,
+				borderColor = n.color,
+				borderWidth = CONFIG.borderWidth,
+				onClick = function()
+					M.dismiss(id)
+				end,
 			})
 		)
+		if hasIcon then
+			table.insert(
+				spec,
+				hl.plugin.hyprlui.Image({
+					id = "icon_" .. id,
+					x = 12,
+					y = (64 - CONFIG.iconSize) / 2,
+					w = CONFIG.iconSize,
+					h = CONFIG.iconSize,
+					path = n.iconPath,
+					pixels = n.iconPixels,
+				})
+			)
+		end
+		table.insert(
+			spec,
+			hl.plugin.hyprlui.Text({
+				id = "summary_" .. id,
+				x = textX,
+				y = 8,
+				text = title,
+				maxW = maxW,
+				size = CONFIG.titleSize,
+				font = CONFIG.font,
+				color = CONFIG.titleColor,
+			})
+		)
+		table.insert(
+			spec,
+			hl.plugin.hyprlui.Text({
+				id = "body_" .. id,
+				x = textX,
+				y = 30,
+				text = n.body,
+				maxW = maxW,
+				size = CONFIG.bodySize,
+				font = CONFIG.font,
+				color = CONFIG.bodyColor,
+			})
+		)
+
+		hl.plugin.hyprlui.add_widget(WINDOW_NAME, "root", hl.plugin.hyprlui.Stack(spec))
 	end)
 	if not ok then
 		warn("hyprlui.add_widget (notification-manager)", err)
@@ -228,19 +348,59 @@ local function handleNotify(event)
 		M.dismiss(event.id)
 	end
 
-	addCard({
-		id = event.id,
-		appName = event.appName or "",
-		summary = event.summary or "",
-		body = event.body or "",
-		color = style.color,
-	})
+	local function finish(iconPath, iconPixels)
+		addCard({
+			id = event.id,
+			appName = event.appName or "",
+			summary = event.summary or "",
+			body = event.body or "",
+			color = style.color,
+			iconPath = iconPath,
+			iconPixels = iconPixels,
+		})
 
-	if dwellMs then
-		hl.timer(function()
-			M.dismiss(event.id)
-		end, { timeout = dwellMs, type = "oneshot" })
+		if dwellMs then
+			hl.timer(function()
+				M.dismiss(event.id)
+			end, { timeout = dwellMs, type = "oneshot" })
+		end
 	end
+
+	-- hints["image-data"] (TASKS.md task 4b) - a raw ARGB32 pixel buffer
+	-- some senders (Vesktop/Discord confirmed live via dbus-monitor) use
+	-- INSTEAD of app_icon/image-path - already the actual bytes (the
+	-- daemon's decodeImageData() forwards {width, height, rowstride,
+	-- hasAlpha, channels, dataBase64}, matching Image{}'s own `pixels`
+	-- field shape directly, no remapping needed), so this skips
+	-- resolveIcon() entirely and takes priority when present - no
+	-- path/theme-name to resolve in the first place.
+	local imageData = event.hints
+		and (event.hints["image-data"] or event.hints["icon_data"] or event.hints["image_data"])
+	if imageData then
+		finish(nil, imageData)
+		return
+	end
+
+	-- app_icon (the positional field) is frequently left empty by real
+	-- senders - confirmed live via dbus-monitor that this system's own
+	-- notify-send (libnotify 0.8.8) puts `-i`'s value into
+	-- hints["image-path"] instead, leaving app_icon "". Both are valid
+	-- per the Notifications spec for a plain path/theme-name reference -
+	-- try app_icon first since it's the canonical field, fall back to
+	-- the hint.
+	local appIcon = event.appIcon
+	if not appIcon or appIcon == "" then
+		appIcon = event.hints and event.hints["image-path"]
+	end
+
+	-- resolveIcon() is async (cached hits/already-a-path still call back
+	-- immediately, but a fresh icon-theme-name lookup shells out) - the
+	-- card only gets built once it resolves, so the dwell timer above
+	-- starts from when the card actually appears, not from event
+	-- arrival.
+	resolveIcon(appIcon, function(iconPath)
+		finish(iconPath, nil)
+	end)
 end
 
 local function handleEvent(event)
@@ -363,6 +523,8 @@ function M.setup(opts)
 		"yOffset",
 		"cardWidth",
 		"gap",
+		"iconSize",
+		"iconGap",
 		"bgColor",
 		"titleColor",
 		"bodyColor",

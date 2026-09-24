@@ -81,14 +81,110 @@ HyprLUI's own active task list.
         (mirrors `m_debugOverflow` exactly) and `fullDamageBox()` now
         pads by both.
       - notification bodies are one line, ellipsis/clip only.
-- [ ] **4. Icon rendering path** - `Image` only takes a file `path` - no
-      icon-theme name lookup, no raw pixel buffer (`hints.image-data`)
-      support. The daemon forwards `appIcon` as a raw string today; the
-      UI doesn't render it at all yet.
+- [x] **4a. Icon rendering path - file path / icon-theme name** - split
+      into two halves after scoping with the user; this is the first.
+      `notification-manager.lua`'s new `resolveIcon(appIcon, cb)`
+      handles the two easy cases: `appIcon` already an absolute path
+      (used directly, no lookup) and a bare freedesktop icon-theme name
+      like `"firefox"`/`"dialog-warning"` (the common case for most
+      native apps) - resolved by a plain recursive `find` (via
+      `hl.plugin.hyprlui.run_cmd`, async/non-blocking, not a blocking
+      `io.popen()`) across every installed icon theme dir plus
+      `/usr/share/pixmaps`, first match wins. Deliberately NOT full XDG
+      icon-theme-spec compliant - no `index.theme` parsing, no theme
+      inheritance, no size/scale matching - just good enough to find
+      most real icons for a demo. Lives entirely in demo-local Lua (the
+      user's own call, over adding a core `hyprlui.resolve_icon()` API)
+      - not reusable by other demos as-is, revisit if one needs it too.
+      Results cached per `appIcon` name (`iconCache`) since most apps
+      send many notifications with the same icon. `appIcon` comes off
+      the session bus (any local process can call `Notify()`) and gets
+      shell-interpolated into the `find` command, so it's checked
+      against an allowlist pattern (`^[%w_.-]+$`, matching the
+      freedesktop icon-naming convention) before ever reaching a shell -
+      anything else is treated as "not found" rather than escaped.
+      `addCard()` now takes an optional `iconPath` and shifts the text
+      column over (`CONFIG.iconSize`/`iconGap`) when one resolved;
+      omitted entirely (original layout) when not.
+      - Icon didn't show up in the user's first live test - `app_icon`
+        arrived empty. Confirmed via `dbus-monitor` that THIS system's
+        `notify-send` (libnotify 0.8.8) doesn't populate the positional
+        `app_icon` field at all for `-i NAME` - it puts `NAME` in
+        `hints["image-path"]` instead (both are valid per the spec for a
+        plain path/theme-name reference, unlike `image-data`, the raw-
+        pixel-buffer one - #4b below). `handleNotify()` now tries
+        `event.appIcon` first, falls back to `event.hints["image-path"]`.
+        Not every sender necessarily behaves this way - if icons still
+        don't show for some app, check with `dbus-monitor --session
+        "interface='org.freedesktop.Notifications',member='Notify'"`
+        which field it's actually using before assuming `resolveIcon()`
+        itself is at fault.
+- [x] **4b. Icon rendering path - raw pixel buffer** - initially
+      deferred, then confirmed live-blocking (Vesktop/Discord sends
+      icons ONLY this way, no `app_icon`/`image-path` at all - found via
+      `dbus-monitor` while chasing why its icon still didn't show after
+      4a). `hints["image-data"]` (also `icon_data`/`image_data` - older
+      draft spellings) is a raw ARGB32 pixel buffer - a DBus STRUCT
+      `(iiibiiay)` (width/height/rowstride/has_alpha/bits_per_sample/
+      channels/raw bytes), not a scalar - two separate gaps, both now
+      closed:
+      - **Daemon** (`daemon/notification-daemon.lua`): `readHints()`
+        only ever called `get_basic()` on hint values, which always
+        fails for a struct (caught by its own `pcall`, hint silently
+        dropped) - `decodeImageData()` (new) special-cases the
+        image-data key(s), recursing into the struct's 6 scalar fields
+        then byte-by-byte through its trailing `ay` (array of byte) -
+        the ldbus binding has no bulk/lstring shortcut for that, only
+        the standard iterate-with-get_basic()+next() protocol. Raw
+        bytes are base64'd (`mime.b64()`, pulled in via the
+        already-a-dependency luasocket) before going into this
+        daemon's own hand-rolled `jsonEncode()` - it uses Lua's `%q`
+        string quoting, not real JSON string escaping (`\ddd` decimal
+        escapes for arbitrary binary bytes aren't valid JSON and would
+        break `demos/jsondecode.lua`, a real parser, on the receiving
+        end) - base64 is plain printable ASCII, safe either way.
+      - **HyprLUI core** (`src/render/gfx.{hpp,cpp}`,
+        `src/ui/ImageWidget.{hpp,cpp}`, `src/ui/WidgetBuilders.cpp`):
+        new `gfx::makeImageTexture(width, height, rowstride, hasAlpha,
+        channels, dataBase64)` overload (alongside the existing
+        path-based one - a separate decode path, not a variant of it,
+        since `Hyprgraphics::CImage` only understands ENCODED file
+        formats, not raw pixel arrays) - base64-decodes (small
+        table-lookup decoder, no existing one anywhere in
+        Hyprland/hyprutils to reuse), then converts row-by-row
+        (respecting the source `rowstride`, which may pad beyond
+        `width*channels`) into what `IHyprRenderer::createTexture(int
+        width, int height, unsigned char*)` actually expects - NOT the
+        same as the cairo-surface overload `makeImageTexture(path)`
+        uses. That raw-buffer overload uploads as `GL_RGBA` then
+        swizzles R↔B on sample (matching `DRM_FORMAT_ARGB8888`'s
+        in-memory BGRA byte order), tightly packed (no rowstride
+        parameter at all), premultiplied - so this does the R,G,B[,A]
+        (spec order, NOT premultiplied) → B,G,R,A-premultiplied
+        conversion by hand per pixel. `CImageWidget` gets a second
+        constructor overload (`SPixelSpec` instead of a path string) -
+        a one-shot decode, no `setPixels()` counterpart to `setImage()`
+        since nothing needs to re-set a pixel-buffer image after
+        construction. `Image{}`'s Lua API gains a `pixels = {width,
+        height, rowstride, hasAlpha, channels, dataBase64}` field as an
+        ALTERNATIVE to `path` (exactly one of the two required, not
+        both).
+      - `notification-manager.lua`: `handleNotify()` now checks
+        `hints["image-data"]` FIRST (its field names already match
+        `Image{}`'s `pixels` shape directly, no remapping) before
+        falling back to `resolveIcon()`'s path/theme-name handling -
+        no filesystem lookup needed when the actual bytes are already
+        in hand. `addCard()` passes through whichever of
+        `iconPath`/`iconPixels` is set.
+      - Only 8-bit-per-channel data is handled (`bits_per_sample`
+        forwarded by the daemon but not read back by HyprLUI) - every
+        real-world sender uses 8 bits in practice; not worth the extra
+        conversion paths for a case nothing actually sends.
 
 ## Demo polish
 
-- [ ] Render the app icon - blocked by #4 above.
+- [x] Render the app icon - both halves done (#4a path/icon-theme-name,
+      #4b raw pixel buffer).
 - [ ] Smooth per-card fade-in/out and reflow on dismiss - blocked by #1/#2.
 - [ ] Multi-line body text - blocked by #3 (or work around with marquee).
 - [ ] Action buttons (`Notify`'s `actions` array - already forwarded by

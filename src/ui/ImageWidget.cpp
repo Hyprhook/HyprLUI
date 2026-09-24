@@ -8,6 +8,14 @@ namespace HyprLUI {
         reload(); // sets the real m_size from the decoded texture, overwriting the {0,0} placeholder above
     }
 
+    CImageWidget::CImageWidget(std::string id, const Vector2D& position, const SPixelSpec& pixels, CHyprColor color, int rounding, Config::CGradientValueData borderColor,
+                               int borderWidth) : CRectNode(std::move(id), position, Vector2D{0, 0}, color, rounding, std::move(borderColor), borderWidth) {
+        m_texture = gfx::makeImageTexture(pixels.width, pixels.height, pixels.rowstride, pixels.hasAlpha, pixels.channels, pixels.dataBase64);
+        if (m_texture)
+            m_size = m_texture->m_size;
+        primeNaturalSize(); // see reload()'s own note on why this is needed for Image specifically
+    }
+
     void CImageWidget::render(const Vector2D& origin, float parentOpacity, const Vector2D& scale) {
         if (!m_visible)
             return;

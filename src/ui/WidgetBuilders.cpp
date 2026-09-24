@@ -44,13 +44,45 @@ namespace HyprLUI::Lua {
             return std::make_shared<CRectNode>(id, pos, Vector2D{wOpt.value_or(0.0), hOpt.value_or(0.0)}, color, rounding, borderColor, borderWidth);
         }
 
+        // `pixels` (hints["image-data"]'s shape - see SPixelSpec/
+        // gfx::makeImageTexture()'s pixel-buffer overload) is an
+        // alternative to `path`, not a modifier of it - exactly one of
+        // the two is required.
+        std::optional<SPixelSpec> optPixelsField(lua_State* L, int idx, const char* key) {
+            lua_getfield(L, idx, key);
+            if (!lua_istable(L, -1)) {
+                lua_pop(L, 1);
+                return std::nullopt;
+            }
+
+            const int  tblIdx = lua_gettop(L);
+            SPixelSpec spec;
+            spec.width      = static_cast<int>(requireFieldNumber(L, tblIdx, "width", "hyprlui.Image.pixels"));
+            spec.height     = static_cast<int>(requireFieldNumber(L, tblIdx, "height", "hyprlui.Image.pixels"));
+            spec.rowstride  = static_cast<int>(requireFieldNumber(L, tblIdx, "rowstride", "hyprlui.Image.pixels"));
+            spec.hasAlpha   = optFieldBool(L, tblIdx, "hasAlpha", true);
+            spec.channels   = static_cast<int>(fieldNumber(L, tblIdx, "channels", 4));
+            spec.dataBase64 = requireFieldString(L, tblIdx, "dataBase64", "hyprlui.Image.pixels");
+            lua_pop(L, 1);
+            return spec;
+        }
+
         PWidget buildImageWidget(lua_State* L, int idx, const std::string& id, const Vector2D& pos) {
-            const auto path        = requireFieldString(L, idx, "path", "hyprlui.Image");
+            const auto pixels      = optPixelsField(L, idx, "pixels");
             const auto color       = parseColorField(L, idx, "color", CHyprColor{0.0, 0.0, 0.0, 0.0}, "hyprlui.Image");
             const int  rounding    = static_cast<int>(fieldNumber(L, idx, "rounding", 0));
             const auto borderColor = parseGradientField(L, idx, "borderColor", CHyprColor{}, "hyprlui.Image");
             const int  borderWidth = static_cast<int>(fieldNumber(L, idx, "borderWidth", 0));
-            auto       image       = std::make_shared<CImageWidget>(id, pos, path, color, rounding, borderColor, borderWidth);
+
+            if (pixels) {
+                auto image = std::make_shared<CImageWidget>(id, pos, *pixels, color, rounding, borderColor, borderWidth);
+                if (!image->loaded())
+                    Log::logger->log(Log::WARN, "[hyprlui] Image '{}': failed to decode pixel buffer - drawing fill/border only", id);
+                return image;
+            }
+
+            const auto path  = requireFieldString(L, idx, "path", "hyprlui.Image (needs 'path' or 'pixels')");
+            auto       image = std::make_shared<CImageWidget>(id, pos, path, color, rounding, borderColor, borderWidth);
             if (!image->loaded())
                 Log::logger->log(Log::WARN, "[hyprlui] Image '{}': failed to load '{}' - drawing fill/border only", id, path);
             return image;

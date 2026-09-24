@@ -11,8 +11,44 @@
 #include <hyprgraphics/cairo/CairoSurface.hpp>
 
 #include <unordered_map>
+#include <vector>
+#include <array>
+#include <cstdint>
 
 namespace HyprLUI::gfx {
+
+    namespace {
+        // Standard table-lookup base64 decoder - skips whitespace/padding
+        // and any other out-of-alphabet byte rather than erroring, since a
+        // malformed buffer should fall through to makeImageTexture()'s own
+        // size check (garbage in, nullptr out) instead of crashing here.
+        std::vector<uint8_t> base64Decode(const std::string& in) {
+            static constexpr auto DECODE_TABLE = []() {
+                std::array<int8_t, 256> t{};
+                t.fill(-1);
+                const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+                for (int i = 0; i < 64; ++i)
+                    t[static_cast<uint8_t>(alphabet[i])] = static_cast<int8_t>(i);
+                return t;
+            }();
+
+            std::vector<uint8_t> out;
+            out.reserve(in.size() / 4 * 3);
+
+            int val = 0, bits = -8;
+            for (unsigned char c : in) {
+                if (DECODE_TABLE[c] < 0)
+                    continue; // padding ('='), whitespace, or garbage - skip
+                val = (val << 6) + DECODE_TABLE[c];
+                bits += 6;
+                if (bits >= 0) {
+                    out.push_back(static_cast<uint8_t>((val >> bits) & 0xFF));
+                    bits -= 8;
+                }
+            }
+            return out;
+        }
+    } // namespace
 
     PHLMONITOR currentMonitor() {
         // Only meaningful while a render pass for a given output is active
@@ -56,6 +92,47 @@ namespace HyprLUI::gfx {
             return nullptr;
 
         return g_pHyprRenderer->createTexture(surface->cairo());
+    }
+
+    SP<HyprTexture> makeImageTexture(int width, int height, int rowstride, bool hasAlpha, int channels, const std::string& dataBase64) {
+        if (width <= 0 || height <= 0 || channels < 3 || rowstride < width * channels)
+            return nullptr;
+
+        const auto raw = base64Decode(dataBase64);
+        if (raw.size() < static_cast<size_t>(rowstride) * height)
+            return nullptr;
+
+        // IHyprRenderer::createTexture(width, height, data) (the width+
+        // height+raw-bytes overload, distinct from the cairo_surface_t*
+        // one used just above) uploads as GL_RGBA then swizzles R<->B on
+        // sample - net effect, it expects `data` already in BGRA byte
+        // order in memory (matching DRM_FORMAT_ARGB8888, what it
+        // allocates the texture as), premultiplied, and tightly packed
+        // (width*4 bytes/row - no rowstride parameter on that call at
+        // all). The spec's own bytes are R,G,B[,A] order, NOT
+        // premultiplied, and may have a rowstride padded beyond
+        // width*channels - convert row by row, respecting the source
+        // rowstride on read and premultiplying alpha on write.
+        std::vector<uint8_t> bgra(static_cast<size_t>(width) * height * 4);
+        for (int y = 0; y < height; ++y) {
+            const uint8_t* srcRow = raw.data() + static_cast<size_t>(y) * rowstride;
+            uint8_t*       dstRow = bgra.data() + static_cast<size_t>(y) * width * 4;
+            for (int x = 0; x < width; ++x) {
+                const uint8_t* srcPx = srcRow + static_cast<size_t>(x) * channels;
+                const uint8_t  r     = srcPx[0];
+                const uint8_t  g     = srcPx[1];
+                const uint8_t  b     = srcPx[2];
+                const uint8_t  a     = (hasAlpha && channels >= 4) ? srcPx[3] : 255;
+
+                uint8_t*       dstPx = dstRow + static_cast<size_t>(x) * 4;
+                dstPx[0]             = static_cast<uint8_t>((b * a + 127) / 255);
+                dstPx[1]             = static_cast<uint8_t>((g * a + 127) / 255);
+                dstPx[2]             = static_cast<uint8_t>((r * a + 127) / 255);
+                dstPx[3]             = a;
+            }
+        }
+
+        return g_pHyprRenderer->createTexture(width, height, bgra.data());
     }
 
     namespace {

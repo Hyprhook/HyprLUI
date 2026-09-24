@@ -70,6 +70,20 @@ namespace HyprLUI::gfx {
     // Cache the result on the node.
     SP<HyprTexture> makeImageTexture(const std::string& path);
 
+    // Builds a GPU texture directly from an ALREADY-DECODED raw pixel
+    // buffer - the freedesktop Notifications spec's hints["image-data"]
+    // shape (width/height/rowstride/has_alpha/channels + base64'd raw
+    // bytes, R/G/B[/A] byte order per pixel, no premultiplication), not
+    // an encoded file format `Hyprgraphics::CImage` (the path-based
+    // overload above) understands - a completely separate decode path,
+    // not a variant of it. Handles base64 decode, rowstride (source rows
+    // may be padded beyond width*channels), and premultiplication (the
+    // GPU upload format needs premultiplied alpha; the spec's own bytes
+    // aren't) internally. Returns nullptr on a malformed buffer (bad
+    // base64, or fewer bytes than width*height*rowstride implies) -
+    // check before use, same as the path-based overload.
+    SP<HyprTexture> makeImageTexture(int width, int height, int rowstride, bool hasAlpha, int channels, const std::string& dataBase64);
+
     // Blits a texture at `box` (screen-space, pixels) with the given alpha
     // and optional corner rounding. `clipBox`, if given (same screen-space
     // coordinates as `box`), hard-clips the drawn pixels to that rect

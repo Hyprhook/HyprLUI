@@ -32,8 +32,10 @@
 local ldbus = require("ldbus")
 local socket = require("socket")
 local unix = require("socket.unix")
+local mime = require("mime") -- luasocket's mime.b64() - base64-encodes hints["image-data"]'s raw pixel bytes for JSON transport (see decodeImageData() below)
 
-local SOCKET_PATH = os.getenv("HYPRLUI_NOTIFY_SOCKET") or (os.getenv("XDG_RUNTIME_DIR") or "/tmp") .. "/hyprlui-notifications.sock"
+local SOCKET_PATH = os.getenv("HYPRLUI_NOTIFY_SOCKET")
+	or (os.getenv("XDG_RUNTIME_DIR") or "/tmp") .. "/hyprlui-notifications.sock"
 
 --------------------------------------------------
 ---- minimal JSON encoder ----
@@ -79,7 +81,9 @@ end
 local conn = assert(ldbus.bus.get("session"))
 local owned, ownErr = ldbus.bus.request_name(conn, "org.freedesktop.Notifications", { replace_existing = true })
 if not owned then
-	io.stderr:write("[hyprlui-notify-daemon] failed to claim org.freedesktop.Notifications: " .. tostring(ownErr) .. "\n")
+	io.stderr:write(
+		"[hyprlui-notify-daemon] failed to claim org.freedesktop.Notifications: " .. tostring(ownErr) .. "\n"
+	)
 	os.exit(1)
 end
 print("[hyprlui-notify-daemon] owns org.freedesktop.Notifications (" .. owned .. ")")
@@ -100,12 +104,65 @@ local function readStringArray(iter)
 	return out
 end
 
+-- hints["image-data"] (some newer senders use "icon_data"/"image_data" -
+-- pre-1.0 draft spellings still seen in the wild) is a raw ARGB32 pixel
+-- buffer, signature "(iiibiiay)": width, height, rowstride, has_alpha,
+-- bits_per_sample, channels, then the raw bytes themselves as an "ay"
+-- (array of byte) - a STRUCT, not a scalar, so get_basic() on it always
+-- fails (see readHints() below). `iter` here is positioned at that
+-- struct already (readHints()'s own variantIter, same convention
+-- readStringArray() above uses - recurse() happens in here, not by the
+-- caller). Raw bytes get base64'd (mime.b64(), pulled in with luasocket
+-- - already a dependency) since this daemon's own jsonEncode() below
+-- uses Lua's %q string quoting, not real JSON string escaping - %q's
+-- \ddd decimal escapes for arbitrary binary bytes aren't valid JSON and
+-- would break the real JSON parser on the receiving end
+-- (demos/jsondecode.lua); base64 is plain printable ASCII, safe either
+-- way.
+local function decodeImageData(iter)
+	local fields = iter:recurse()
+	local width = fields:get_basic()
+	fields:next()
+	local height = fields:get_basic()
+	fields:next()
+	local rowstride = fields:get_basic()
+	fields:next()
+	local hasAlpha = fields:get_basic()
+	fields:next()
+	local bitsPerSample = fields:get_basic()
+	fields:next()
+	local channels = fields:get_basic()
+	fields:next()
+
+	local bytes = {}
+	local byteIter = fields:recurse()
+	if byteIter and byteIter:get_arg_type() then -- get_arg_type() is nil once the array is empty/exhausted
+		while true do
+			bytes[#bytes + 1] = string.char(byteIter:get_basic())
+			if not byteIter:next() then
+				break
+			end
+		end
+	end
+
+	return {
+		width = width,
+		height = height,
+		rowstride = rowstride,
+		hasAlpha = hasAlpha,
+		bitsPerSample = bitsPerSample,
+		channels = channels,
+		dataBase64 = mime.b64(table.concat(bytes)),
+	}
+end
+
 -- Reads an "a{sv}" (dict of string -> variant) argument - Notify's
 -- hints. Each entry is itself a container (key, then value) - recurse()
 -- twice: once into the array to get each dict_entry, once more into the
--- dict_entry itself. Only scalar variant values are read (get_basic());
--- a struct/array-typed hint value is skipped, not erroring the whole
--- notification out over one hint we don't understand.
+-- dict_entry itself. Scalar variant values are read directly
+-- (get_basic()); image-data/icon_data/image_data (a struct) gets its own
+-- decoder above; any OTHER struct/array-typed hint value is skipped, not
+-- erroring the whole notification out over one hint we don't understand.
 local function readHints(iter)
 	local hints = {}
 	local dictIter = iter:recurse()
@@ -114,12 +171,18 @@ local function readHints(iter)
 		local key = entry:get_basic()
 		entry:next()
 		local variantIter = entry:recurse()
-		local ok, value = pcall(function()
-			return variantIter:get_basic()
-		end)
-		if ok then
-			hints[key] = value
+
+		if (key == "image-data" or key == "icon_data" or key == "image_data") and variantIter:get_arg_type() == "r" then
+			hints[key] = decodeImageData(variantIter)
+		else
+			local ok, value = pcall(function()
+				return variantIter:get_basic()
+			end)
+			if ok then
+				hints[key] = value
+			end
 		end
+
 		if not dictIter:next() then
 			break
 		end
@@ -266,7 +329,11 @@ local handlers = {
 
 		-- reason 3: "closed by a call to CloseNotification" - see the
 		-- spec's NotificationClosed signal reasons.
-		local signal = ldbus.message.new_signal("/org/freedesktop/Notifications", "org.freedesktop.Notifications", "NotificationClosed")
+		local signal = ldbus.message.new_signal(
+			"/org/freedesktop/Notifications",
+			"org.freedesktop.Notifications",
+			"NotificationClosed"
+		)
 		local sIter = signal:iter_init_append()
 		sIter:append_basic(id, ldbus.basic_types.uint32)
 		sIter:append_basic(3, ldbus.basic_types.uint32)
@@ -303,7 +370,13 @@ while true do
 		if handler then
 			local ok, err = pcall(handler, msg)
 			if not ok then
-				io.stderr:write("[hyprlui-notify-daemon] error handling " .. tostring(msg:get_member()) .. ": " .. tostring(err) .. "\n")
+				io.stderr:write(
+					"[hyprlui-notify-daemon] error handling "
+						.. tostring(msg:get_member())
+						.. ": "
+						.. tostring(err)
+						.. "\n"
+				)
 			end
 		end
 	end
