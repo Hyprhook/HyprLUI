@@ -254,6 +254,32 @@ end
 --------------------------------------------------
 ---- socket connection ----
 --------------------------------------------------
+-- Neither a failed connect NOR a mid-session disconnect (daemon
+-- restarted/crashed) recovered on its own before this - the read loop
+-- just stopped, silently, until the next full Lua config reload happened
+-- to call M.setup() again. `connect()` below is the retry loop for both
+-- cases; `warnedDisconnected` limits the "can't reach the daemon"
+-- notification to once per outage instead of once per retry (the daemon
+-- being down for a while would otherwise spam a popup every
+-- RECONNECT_DELAY_MS).
+local RECONNECT_DELAY_MS = 3000
+local warnedDisconnected = false
+
+local function warnDisconnectedOnce(reason)
+	if warnedDisconnected then
+		return
+	end
+	warnedDisconnected = true
+	warn("hyprlui notification-manager", reason .. " - retrying every " .. (RECONNECT_DELAY_MS / 1000) .. "s")
+end
+
+-- Forward-declared: startReadLoop()'s onData (below) needs to schedule a
+-- reconnect through this on disconnect, and connect() (further below)
+-- needs to hand its successful connection to startReadLoop() - by the
+-- time either closure actually RUNS, `connect` has already been assigned
+-- its function value, same as any other mutually-recursive local pair.
+local connect
+
 -- open_socket()'s sock:read(callback) delivers one read()'s worth of
 -- data per call, not necessarily one line - a JSON line from the daemon
 -- can split across reads or arrive batched with others, so this buffers
@@ -263,7 +289,8 @@ local function startReadLoop(sock)
 
 	local function onData(chunk)
 		if not chunk then
-			warn("hyprlui notification-manager", "daemon connection closed")
+			warnDisconnectedOnce("daemon connection closed")
+			hl.timer(connect, { timeout = RECONNECT_DELAY_MS, type = "oneshot" })
 			return
 		end
 
@@ -287,6 +314,29 @@ local function startReadLoop(sock)
 	end
 
 	sock:read(onData)
+end
+
+-- Same guard discipline as M.dismiss() (see its own doc comment) - the
+-- retry timer armed below can still fire after hl.plugin.hyprlui goes
+-- away mid-flight (the plugin binary itself getting rebuilt/reloaded
+-- while a reconnect is pending), so this has to survive that on its own
+-- rather than assuming the M.setup() that originally started it is still
+-- the one in charge.
+function connect()
+	if hl.plugin.hyprlui == nil then
+		return
+	end
+	hl.plugin.hyprlui.open_socket(CONFIG.socketPath, function(sock)
+		if not sock then
+			warnDisconnectedOnce(
+				"could not connect to " .. CONFIG.socketPath .. " - is notification-daemon.service running?"
+			)
+			hl.timer(connect, { timeout = RECONNECT_DELAY_MS, type = "oneshot" })
+			return
+		end
+		warnedDisconnected = false
+		startReadLoop(sock)
+	end)
 end
 
 -- Call any time after require()'ing this module - same convention
@@ -341,18 +391,8 @@ function M.setup(opts)
 
 	liveIds = {}
 	windowCreated = false
-	if hl.plugin.hyprlui ~= nil then
-		hl.plugin.hyprlui.open_socket(CONFIG.socketPath, function(sock)
-			if not sock then
-				warn(
-					"hyprlui notification-manager",
-					"could not connect to " .. CONFIG.socketPath .. " - is notification-daemon.service running?"
-				)
-				return
-			end
-			startReadLoop(sock)
-		end)
-	end
+	warnedDisconnected = false
+	connect()
 end
 
 return M
