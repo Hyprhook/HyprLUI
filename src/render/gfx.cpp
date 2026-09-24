@@ -71,7 +71,7 @@ namespace HyprLUI::gfx {
         }
     } // namespace
 
-    void drawTexture(const SP<HyprTexture>& tex, const CBox& box, float alpha, int rounding) {
+    void drawTexture(const SP<HyprTexture>& tex, const CBox& box, float alpha, int rounding, std::optional<CBox> clipBox) {
         if (!tex)
             return;
 
@@ -84,6 +84,8 @@ namespace HyprLUI::gfx {
         data.a             = alpha;
         data.round         = rounding;
         data.roundingPower = 2.F;
+        if (clipBox)
+            data.clipBox = toMonitorLocal(*clipBox);
 
         g_pHyprRenderer->m_renderPass.add(makeUnique<CTexPassElement>(data));
     }

@@ -138,9 +138,8 @@ namespace HyprLUI {
             outVisible = true;
             *anim      = 1.0f;
         } else {
-            *anim = 0.0f;
-            auto* rawAnim =
-                anim.get(); // safe: `anim` (the caller's member) outlives the callback below, which only reads this after anim() returns
+            *anim         = 0.0f;
+            auto* rawAnim = anim.get(); // safe: `anim` (the caller's member) outlives the callback below, which only reads this after anim() returns
             anim->setCallbackOnEnd([rawAnim, onHideFinished](WP<Hyprutils::Animation::CBaseAnimatedVariable>) {
                 if (rawAnim->goal() == 0.0f)
                     onHideFinished();
@@ -472,7 +471,9 @@ namespace HyprLUI {
         // Whether this widget's own visibility fade, or any descendant's,
         // is actively interpolating - used by CCanvas::render() to know
         // whether to keep damaging every frame while a fade is in flight.
-        bool isAnimating() const {
+        // Virtual so a leaf with its own independent animation loop (e.g.
+        // CTextNode's marquee) can fold its state into the same signal.
+        virtual bool isAnimating() const {
             if (m_visibilityAnim && m_visibilityAnim->isBeingAnimated())
                 return true;
             for (auto& child : m_children)

@@ -141,10 +141,47 @@ namespace HyprLUI::Lua {
             } else {
                 text = requireFieldString(L, idx, "text", "hyprlui.Text");
             }
-            const int  size     = static_cast<int>(fieldNumber(L, idx, "size", 16));
-            const auto color    = parseColorField(L, idx, "color", CHyprColor{1.0, 1.0, 1.0, 1.0}, "hyprlui.Text");
-            const auto font     = optFieldString(L, idx, "font", "sans");
-            auto       textNode = std::make_shared<CTextNode>(id, pos, text, size, color, font);
+            const int     size        = static_cast<int>(fieldNumber(L, idx, "size", 16));
+            const auto    color       = parseColorField(L, idx, "color", CHyprColor{1.0, 1.0, 1.0, 1.0}, "hyprlui.Text");
+            const auto    font        = optFieldString(L, idx, "font", "sans");
+            const auto    overflowStr = optFieldString(L, idx, "overflow", "ellipsis");
+            ETextOverflow overflow    = ETextOverflow::Ellipsis;
+            if (overflowStr == "clip")
+                overflow = ETextOverflow::Clip;
+            else if (overflowStr != "ellipsis")
+                luaL_error(L, "hyprlui.Text: 'overflow' must be 'ellipsis' or 'clip', got '%s'", overflowStr.c_str());
+
+            // `marquee = true` for defaults, or a table to override
+            // pauseMs/speed - same boolean-or-table shape debugShow uses
+            // above. `bezier`/`spring`, if given, are resolved like
+            // animationIn/animationOut's own; omitted means linear motion.
+            std::optional<SMarqueeSpec> marquee;
+            lua_getfield(L, idx, "marquee");
+            if (lua_istable(L, -1)) {
+                const int    marqueeIdx = lua_gettop(L);
+                SMarqueeSpec spec;
+                spec.pauseMs       = fieldNumber(L, marqueeIdx, "pauseMs", spec.pauseMs);
+                spec.speedPxPerSec = fieldNumber(L, marqueeIdx, "speed", spec.speedPxPerSec);
+
+                lua_getfield(L, marqueeIdx, "bezier");
+                const bool hasBezier = !lua_isnil(L, -1);
+                lua_pop(L, 1);
+                lua_getfield(L, marqueeIdx, "spring");
+                const bool hasSpring = !lua_isnil(L, -1);
+                lua_pop(L, 1);
+                if (hasBezier || hasSpring)
+                    spec.curve = resolveCurveField(L, marqueeIdx, "hyprlui.Text: field 'marquee'");
+
+                marquee = spec;
+            } else if (lua_isboolean(L, -1)) {
+                if (lua_toboolean(L, -1))
+                    marquee = SMarqueeSpec{};
+            } else if (!lua_isnil(L, -1)) {
+                luaL_error(L, "hyprlui.Text: 'marquee' must be a boolean or a table");
+            }
+            lua_pop(L, 1);
+
+            auto textNode = std::make_shared<CTextNode>(id, pos, text, size, color, font, overflow, marquee);
 
             if (bindName) {
                 // Captures the raw CTextNode* (not the shared_ptr) - the

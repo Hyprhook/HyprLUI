@@ -27,9 +27,11 @@ for its own type:
 - **`minW`, `minH`, `maxW`, `maxH`** - clamp the measured size on each axis
   independently, after any fixed `w`/`h` (same precedence CSS gives
   min/max-width over an explicit width). `Text` content that doesn't fit
-  `maxW` truncates with an ellipsis. `minW`/`minH` widen the layout box
-  without stretching a `Text`'s rendered glyphs to fill it - every other
-  widget type just gets visually bigger.
+  `maxW` truncates with an ellipsis by default, or hard-clips instead if
+  `overflow = "clip"` (see `Text{}` below) - either way a no-op unless
+  `maxW` is actually set. `minW`/`minH` widen the layout box without
+  stretching a `Text`'s rendered glyphs to fill it - every other widget
+  type just gets visually bigger.
 - **`opacity`** - `0`-`1`, default `1`. Multiplies with every ancestor's
   own opacity (a semi-transparent container fades its children too).
 - **`zIndex`** - integer, default `0`. Reorders paint order among a
@@ -63,9 +65,24 @@ for its own type:
   **/ `Column{ ...same fields... }`** - flexbox-lite: packs children along
   the row/column axis with `gap` between them; `align` controls cross-axis
   alignment. No wrap, no justify/space-between.
-- **`Text{ id, x = 0, y = 0, text, size = 16, color, font = "sans", visible }`**
+- **`Text{ id, x = 0, y = 0, text, size = 16, color, font = "sans", overflow = "ellipsis"|"clip", marquee, visible }`**
   - `text` may be a plain string or `Bind(name)` (see Reactivity) to keep
   it tracking a watcher's current value.
+  - `overflow` only matters when `maxW` is also set (see above): `"ellipsis"`
+  (default) truncates with `...`; `"clip"` hard-clips the glyphs at `maxW`
+  instead, no `...`.
+  - `marquee` - opt-in continuous scrolling for text that overflows `maxW`
+  (also requires `maxW`; no-op without it, and implies clip-style hard-
+  clipping on its own regardless of `overflow`). Pauses for a beat showing
+  the start of the text, then scrolls left in a seamless loop (a second
+  copy trails in from the right so the wrap point never jumps) until back
+  at the start, where it pauses again and repeats. `marquee = true` for
+  built-in defaults, or `marquee = { pauseMs = 1200, speed = 40 }`
+  (px/second) to override either. By default the scroll itself is plain
+  constant-velocity motion, no smoothing - set `bezier`/`spring` on the
+  same table (resolved exactly like `animationIn`/`animationOut`'s own
+  fields below) to ease its start/end instead:
+  `marquee = { bezier = "myCurve" }`.
 - **`Box{ id, x = 0, y = 0, w = 0, h = 0, color, rounding = 0, borderColor, borderWidth = 0, visible }`**
   - a flat-filled rectangle. `w`/`h` default to `0` if omitted rather than
   erroring - almost always paired with `fill = true` in practice. If both

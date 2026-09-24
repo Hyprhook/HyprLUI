@@ -2,7 +2,7 @@ local M = {}
 -- task-checks.lua
 --
 -- Small demos exercising DESIGN.md's active task list items that
--- actually have observable Lua-facing behavior: tasks 1, 2, 4, 5, 6.
+-- actually have observable Lua-facing behavior: tasks 1, 2, 4, 5, 6, 8, 16.
 -- Task 3 (LuaBridge.cpp split) is pure internal C++ restructuring with
 -- zero change to the Lua API - nothing to demo. Task 7 (Stack padding/
 -- margin) was a confirmed no-change. Not exhaustive coverage, just
@@ -298,6 +298,140 @@ local function toggleTask6()
 	task6Open = true
 end
 
+--------------------------------------------------
+---- Task 8: text overflow modes ----
+--------------------------------------------------
+-- Same long string, same maxW, side by side: default ellipsis truncation
+-- vs the new overflow = "clip" hard-clip (no "...", glyphs just cut off).
+
+local TASK8_WINDOW = "hyprlui_task8_demo"
+local task8Open = false
+
+local function toggleTask8()
+	if task8Open then
+		hl.plugin.hyprlui.remove_canvas(TASK8_WINDOW)
+		task8Open = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = TASK8_WINDOW,
+			anchor = "center",
+			hl.plugin.hyprlui.Column({
+				id = "root",
+				gap = 8,
+				padding = 12,
+				hl.plugin.hyprlui.Text({
+					id = "title",
+					text = "task 8: text overflow modes",
+					size = 14,
+					color = 0xffcba6f7,
+				}),
+				hl.plugin.hyprlui.Text({
+					id = "ellipsis",
+					text = "default (ellipsis): a long string that overflows maxW",
+					maxW = 160,
+					size = 12,
+					color = 0xff89b4fa,
+				}),
+				hl.plugin.hyprlui.Text({
+					id = "clip",
+					text = "overflow = clip: a long string that overflows maxW",
+					maxW = 160,
+					overflow = "clip",
+					size = 12,
+					color = 0xffa6e3a1,
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		warn("hyprlui.window (task8)", err)
+		return
+	end
+	task8Open = true
+end
+
+--------------------------------------------------
+---- Task 16: marquee text ----
+--------------------------------------------------
+-- Four copies of the same long string: static clip, marquee = true
+-- (linear), and marquee with a curve - one bezier, one spring, both
+-- custom-defined below via hl.curve() (Hyprland's own Lua API), not
+-- Hyprland's built-in "default". Registered once at module load, before
+-- toggleTask16() ever builds a Text referencing them by name.
+hl.curve("hyprlui_task16_bezier", { type = "bezier", points = { { 0.65, 0 }, { 0.35, 1 } } })
+-- `dampening`, not `damping` - this Hyprland build's hl.curve() still
+-- expects the older field name.
+hl.curve("hyprlui_task16_spring", { type = "spring", stiffness = 120, dampening = 14, mass = 1 })
+
+local TASK16_WINDOW = "hyprlui_task16_demo"
+local task16Open = false
+
+local function toggleTask16()
+	if task16Open then
+		hl.plugin.hyprlui.remove_canvas(TASK16_WINDOW)
+		task16Open = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = TASK16_WINDOW,
+			anchor = "center",
+			hl.plugin.hyprlui.Column({
+				id = "root",
+				gap = 8,
+				padding = 12,
+				hl.plugin.hyprlui.Text({
+					id = "title",
+					text = "task 16: marquee text",
+					size = 14,
+					color = 0xffcba6f7,
+				}),
+				hl.plugin.hyprlui.Text({
+					id = "static",
+					text = "static clip (no marquee) - a long string that overflows maxW",
+					maxW = 180,
+					overflow = "clip",
+					size = 12,
+					color = 0xff89b4fa,
+				}),
+				hl.plugin.hyprlui.Text({
+					id = "marquee",
+					text = "marquee = true - a long string that overflows maxW and scrolls",
+					maxW = 180,
+					marquee = true,
+					size = 12,
+					color = 0xffa6e3a1,
+				}),
+				hl.plugin.hyprlui.Text({
+					id = "marquee_bezier",
+					text = "marquee = { bezier = '...' } - eased with a custom bezier",
+					maxW = 180,
+					marquee = { bezier = "hyprlui_task16_bezier" },
+					size = 12,
+					color = 0xfffab387,
+				}),
+				hl.plugin.hyprlui.Text({
+					id = "marquee_spring",
+					text = "marquee = { spring = '...' } - eased with a custom spring",
+					maxW = 180,
+					marquee = { spring = "hyprlui_task16_spring" },
+					size = 12,
+					color = 0xfff38ba8,
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		warn("hyprlui.window (task16)", err)
+		return
+	end
+	task16Open = true
+end
+
 function M.test_binds()
 	hl.bind("ALT + SHIFT + 1", toggleTask1, { description = "task-checks: toggle task 1 demo (window naming)" })
 	hl.bind("ALT + SHIFT + 2", toggleTask2, { description = "task-checks: toggle task 2 demo (Box sizing)" })
@@ -309,6 +443,8 @@ function M.test_binds()
 		hl.plugin.hyprlui.set_canvas_visible(TASK5_WINDOW, true)
 	end, { description = "task-checks: show task 5 demo (hotReload)" })
 	hl.bind("ALT + SHIFT + 3", toggleTask6, { description = "task-checks: toggle task 6 demo (monitor-span sizing)" })
+	hl.bind("ALT + SHIFT + 7", toggleTask8, { description = "task-checks: toggle task 8 demo (text overflow modes)" })
+	hl.bind("ALT + SHIFT + 8", toggleTask16, { description = "task-checks: toggle task 16 demo (marquee text)" })
 end
 
 return M

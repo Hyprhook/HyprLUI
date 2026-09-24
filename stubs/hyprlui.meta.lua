@@ -169,10 +169,12 @@
 -- `minW`/`minH`/`maxW`/`maxH` clamp the measured size on each axis
 -- independently (either bound may be omitted) - applied after any fixed
 -- w/h override, same precedence CSS gives min/max-width. A `Text` whose
--- content doesn't fit `maxW` truncates with an ellipsis (Hyprland's own
--- Pango-based text renderer already does this given a max width - the
--- chosen v1 overflow default, see DESIGN.md Phase 7); `minW`/`minH` widen
--- the layout box without stretching a Text's rendered glyphs.
+-- content doesn't fit `maxW` truncates with an ellipsis by default
+-- (Hyprland's own Pango-based text renderer already does this given a max
+-- width), or hard-clips instead with no `...` if `overflow = "clip"` is
+-- set (see HyprLUI.TextSpec below) - either way a no-op unless `maxW` is
+-- actually set. `minW`/`minH` widen the layout box without stretching a
+-- Text's rendered glyphs.
 --
 -- `opacity` (0-1, default 1) multiplies with every ancestor's own opacity
 -- - a semi-transparent container fades its children too, not just itself.
@@ -251,6 +253,20 @@
 ---@field size? integer
 ---@field color? HyprLUI.Color
 ---@field font? string
+---@field overflow? "ellipsis"|"clip"
+---@field marquee? boolean|HyprLUI.MarqueeSpec
+
+-- Continuous scrolling for Text that overflows maxW - requires maxW, and
+-- implies clip-style hard-clipping regardless of `overflow`. `true` uses
+-- the built-in defaults (pauseMs = 1200, speed = 40); a table overrides
+-- either. `bezier`/`spring` are resolved exactly like animationIn/
+-- animationOut's own (see HyprLUI.AnimationOverride) - omitted means
+-- plain constant-velocity motion, no smoothing.
+---@class HyprLUI.MarqueeSpec
+---@field pauseMs? number
+---@field speed? number
+---@field bezier? string
+---@field spring? string
 
 -- Manual/absolute positioning - the escape hatch. Size-to-content is the
 -- bounding box of its children unless w/h are given.

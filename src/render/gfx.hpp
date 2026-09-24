@@ -15,6 +15,7 @@
 #include <hyprland/src/render/Texture.hpp>
 //#include <hyprland/src/desktop/Window.hpp> // pulls in PHLMONITOR-adjacent types
 
+#include <optional>
 #include <string>
 
 // Forward-declared, not `#include`d, on purpose - only a `const&` of this
@@ -70,8 +71,12 @@ namespace HyprLUI::gfx {
     SP<HyprTexture> makeImageTexture(const std::string& path);
 
     // Blits a texture at `box` (screen-space, pixels) with the given alpha
-    // and optional corner rounding.
-    void drawTexture(const SP<HyprTexture>& tex, const CBox& box, float alpha = 1.F, int rounding = 0);
+    // and optional corner rounding. `clipBox`, if given (same screen-space
+    // coordinates as `box`), hard-clips the drawn pixels to that rect
+    // instead of `box`'s own extent - e.g. text's hard-clip overflow mode,
+    // which draws the full un-truncated texture but only lets `clipBox`
+    // actually show.
+    void drawTexture(const SP<HyprTexture>& tex, const CBox& box, float alpha = 1.F, int rounding = 0, std::optional<CBox> clipBox = std::nullopt);
 
     // Draws a flat-filled rectangle, e.g. as a panel background.
     void drawRect(const CBox& box, const CHyprColor& color, int rounding = 0);

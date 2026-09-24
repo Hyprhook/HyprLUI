@@ -431,13 +431,34 @@ in full. Tracked here going forward instead of as numbered phases.
 - [x] **7. Stack padding/margin** - confirmed no change: `Stack`'s manual/
       absolute positioning continues to ignore `padding`/`margin`
       entirely, by design.
-- [ ] **8. Text overflow modes** - wrap explicitly rejected (would make
-      text height content-dependent again, undoing Phase 20's fix). Add
-      **hard-clip** as a third overflow option alongside the existing
-      default truncate-with-ellipsis. Future, separate, not-yet-scoped
-      feature: a marquee-style continuously-scrolling text mode - closer in
-      scope to the fade/slide animation system than a simple overflow
-      mode.
+- [x] **8. Text overflow modes** - wrap explicitly rejected (would make
+      text height content-dependent again, undoing Phase 20's fix). Added
+      **hard-clip** as a second overflow option alongside the existing
+      default truncate-with-ellipsis, selected via `Text{ overflow =
+      "ellipsis"|"clip" }` (string enum, matching `align`/`zorder`'s own
+      convention rather than a boolean - leaves room for a future
+      marquee mode without a breaking change). No-op either way unless
+      `maxW` is also set - nothing to overflow against otherwise.
+      Ellipsis mode is unchanged (still just forwards `maxW` into
+      Hyprland's own Pango-based `renderText()`, which truncates-with-
+      ellipsis for free). Clip mode needed a new primitive: Hyprland's
+      renderer has no clip/hard-cutoff mode of its own, so
+      `CTextNode::rebuildTexture()` rasterizes the FULL un-truncated
+      texture (`maxWidth = 0`) instead, and `render()` hard-clips the
+      drawn pixels to `maxW` via a new optional `clipBox` parameter on
+      `gfx::drawTexture()`, which forwards straight into
+      `CTexPassElement::SRenderData::clipBox` - a scissor rect Hyprland's
+      own tex-pass element already supports (confirmed against
+      Hyprland's actual render pass source, not guessed: a default/empty
+      `CBox{}` is a no-op, gated by `.width != 0 && .height != 0`
+      throughout `ElementRenderer.cpp`/`OpenGL.cpp`). The widget's
+      LAYOUT footprint (`m_size.x`) is clamped to `maxW` in clip mode too
+      (CSS `overflow: hidden` box-model - reserved space matches what's
+      visible, not the full un-clipped glyph run), same as ellipsis
+      mode's texture-width-already-fits-`maxW` behavior gets for free.
+      Future, separate, not-yet-scoped feature: a marquee-style
+      continuously-scrolling text mode - closer in scope to the
+      fade/slide animation system than a simple overflow mode.
 - [ ] **9. Runtime mutation - generic attribute setter** - one generic
       mutator, roughly `(window_name, widget_id, attribute_name: string,
       new_value)`, validating and setting any widget attribute under the
@@ -508,6 +529,146 @@ in full. Tracked here going forward instead of as numbered phases.
       existing gfx::drawRect() call and `CTextNode::render()`'s texture
       draw would need reordering the same way Image's did in task 4 (fill
       -> texture -> border, so the border stays on top).
+- [x] **16. Marquee text** - the continuously-scrolling text mode task 8
+      flagged as future/separate. `Text{ marquee = true | { pauseMs, speed }
+      }`, independent of `overflow` (implies clip-style hard-clipping on
+      its own) and a no-op unless the text is actually wider than `maxW`,
+      same rule `overflow = "clip"` follows. Motion, confirmed with the
+      user over two rounds (their first description read as a discrete
+      pause/scroll/pause/snap-back cycle; they then clarified they actually
+      wanted a continuous seamless loop instead, with the pause only at the
+      point the view returns to the very start of the string - not also at
+      the tail): pause for `pauseMs` showing the start of the text, then
+      scroll left continuously at `speed` px/s - a second, gap-separated
+      copy of the texture trails in from the right so the wrap point is
+      never a visible jump-cut - until exactly one full cycle (text width +
+      gap) has passed, at which point the view is back at the start and it
+      pauses again. Default motion is plain constant-velocity - no
+      smoothing.
+      - Follow-up #1 (same session): the scroll phase's start/end were an
+        instantaneous 0-to-full-speed jump, jarring against the pause
+        either side of it - tried a hand-rolled duration-based
+        ease-in-out-quad curve.
+      - Follow-up #2 (same session, superseding #1): the user pointed out
+        Hyprland's own bezier-curve system - the same `PHLANIMVAR`/
+        `SAnimationPropertyConfig` machinery `animationIn`/`animationOut`
+        already use - was a better fit than a hardcoded quad, so it
+        replaced #1 rather than layering on top of it. Reverted the
+        DEFAULT back to plain constant-velocity (no smoothing, matching
+        the original ship), and added `bezier`/`spring` fields to
+        `marquee`'s own table, parsed via the exact same
+        `AnimationParsers::resolveCurveField()` helper `animationIn`/
+        `animationOut` call - so a curve registered in the user's own
+        hyprland.conf works here too, not just a fixed formula. When set:
+        a per-node `PHLANIMVAR<float>` (lazily created via
+        `Animation::mgr()->createAnimation()`) animates the offset 0 ->
+        loopWidth each scroll phase, using `makeAnimationConfig()` (the
+        same helper `optAnimationOverrideField()` already builds
+        `animationIn`/`animationOut` overrides from) with `speed`
+        converted from px/s to Hyprland's own deciseconds-per-loop unit;
+        completion is polled via `isBeingAnimated()` each frame (simpler
+        than a callback chain for a value that gets manually restarted
+        every cycle) and the variable is `setValueAndWarp(0.f)` back to 0
+        before the next cycle's assignment - a plain `operator=()` would
+        silently no-op there since the new goal (`loopWidth`) already
+        equals the previous cycle's goal.
+      - Follow-up #3 (same session): demo now defines and uses its OWN
+        bezier and spring, not Hyprland's built-in "default" - no HyprLUI
+        code needed for this at all, since Hyprland's own Lua API already
+        exposes curve registration: `hl.curve(name, { type = "bezier",
+        points = {{x0,y0},{x1,y1}} })` / `hl.curve(name, { type =
+        "spring", stiffness, damping (or the older `dampening`), mass })`
+        (confirmed against Hyprland's actual source, not guessed -
+        `LuaBindingsConfigRules.cpp`'s `hlCurve()`/`hl.curve` registration
+        - the same `Animation::mgr()` registry hyprland.conf's own
+        `bezier =` config line and HyprLUI's `resolveCurveField()`
+        validation both already read from). Hit live: the installed
+        Hyprland runtime here still expects the OLDER field name -
+        `dampening`, not `damping` - errored "dampening expects a
+        number" at runtime until switched; the checked-out Hyprland
+        source read for this task supports both (`damping` primary,
+        `dampening` as a documented back-compat fallback), so the
+        installed build predates that rename. `demos/task-checks.lua`'s
+        task 16 section now calls `hl.curve()` twice at module load
+        (before `toggleTask16()` ever builds a `Text` referencing them by
+        name) and the demo shows four variants side by side: static clip,
+        linear marquee, custom-bezier marquee, custom-spring marquee.
+      - Follow-up #4 (same session): reported live - both bezier and
+        spring marquees sat frozen at the pause position, never scrolling.
+        Root cause not conclusively pinned down (needs the actual
+        compositor's compiled internals, not just headers, to confirm),
+        but the `PHLANIMVAR<float>` from #2 never appeared to advance past
+        its initial value despite `*anim = goal` firing (same construction
+        pattern `CWidget`'s own working `m_visibilityAnim` uses) - possibly
+        Hyprland's `AnimationManager` not ticking a freestanding,
+        context-less per-node variable reliably in this build, though
+        that's inference, not a confirmed cause. Rather than keep
+        debugging an opaque dependency, replaced it with fully
+        self-contained per-frame evaluation - still genuinely reading the
+        SAME registered curve data `hl.curve()` wrote via
+        `Animation::mgr()`, just applied by `CTextNode` itself instead of
+        relying on the manager's own tick to update a value we then
+        sample:
+        - Bezier: a pure function of normalized time - `t = elapsed /
+          duration` (same duration math as #2), progress =
+          `Animation::mgr()->getBezier(name)->getYForPoint(t)`
+          (`CBezierCurve`'s own evaluator, confirmed present in
+          hyprutils - no guessing at its curve math, just calling it).
+        - Spring: NOT a pure function of progress (a spring has no fixed
+          duration - it settles asymptotically), so integrated instead:
+          semi-implicit Euler stepping of a standard damped-harmonic-
+          oscillator (`accel = -(stiffness*(pos-target) + damping*vel) /
+          mass`) each frame using dtMs, reading the REAL registered
+          `SSpringCurve`'s `stiffness`/`damping`/`mass` via
+          `Animation::mgr()->getSpring(name)`, "done" once within its own
+          `valueEpsilon`/`velocityEpsilon` of the target (the same
+          completion fields Hyprland's own spring config already has, read
+          rather than reimplemented).
+        - The `PHLANIMVAR`/`m_marqueeAnim` field, `makeAnimationConfig()`
+          call, and `isBeingAnimated()` polling from #2 were all removed -
+          no longer needed now that nothing depends on the manager's tick.
+          `resolveCurveField()`'s own `"spring:" + name` encoding (used to
+          disambiguate a bezier name from a spring name in one string
+          field, matching `internalBezier`'s own convention) is now parsed
+          back out locally instead of being handed to
+          `SAnimationPropertyConfig`.
+      - Needed a new low-level primitive: Hyprland's own text renderer has
+        no clip mode at all (confirmed against its actual render-pass
+        source, not guessed - see task 8's own entry), so
+        `gfx::drawTexture()` gained an optional `clipBox` parameter,
+        forwarding straight into `CTexPassElement::SRenderData::clipBox` (a
+        scissor rect the pass element already supports, gated by
+        `.width != 0 && .height != 0` - an omitted/default `CBox{}` is
+        already a no-op, so this is purely additive for every existing
+        caller). Task 8's own hard-clip mode was reimplemented on top of
+        the same parameter instead of anything bespoke.
+      - `CWidget::isAnimating()` had to become `virtual` - it was a plain
+        non-virtual method (only checking the visibility-fade animation +
+        recursing children) with no extension point for a leaf that needs
+        its own independent, indefinitely-looping animation signal, unlike
+        Hyprland's own bezier-curve `SAnimationPropertyConfig` machinery
+        (one-shot 0->1, wrong shape for an infinite loop). `CTextNode`
+        overrides it to also report true while actively mid-scroll (not
+        during the start-of-loop pause), which is what keeps
+        `CCanvas::render()` damaging every frame for as long as glyphs are
+        actually moving - same mechanism the fade animations already
+        relied on, just fed from a second source now.
+      - The pause/scroll state machine advances by real elapsed wall-clock
+        time (`std::chrono::steady_clock`) inside `CTextNode::render()`
+        itself, not frame count - render() runs every frame this widget is
+        visible regardless of `isAnimating()`'s own one-frame-stale damage
+        signal (same already-accepted staleness pattern
+        `CCanvas::render()`'s debug-overlay-overflow tracking uses), so the
+        timer stays accurate even through the (harmless, self-correcting)
+        first transition frame where damage() lags by one tick.
+      - Bug caught by clangd static analysis before ever reaching a real
+        build: `Vector2D{someDouble, 0}` (int literal `0` alongside a
+        `double`) is genuinely ambiguous between `Vector2D`'s `(double,
+        double)` and `(int, int)` constructor overloads - fixed by writing
+        `0.0`. Notable since most clangd diagnostics this session have been
+        the unrelated, unreliable `libudev.h`-cascade false-positive
+        pattern - this one was real and worth catching before a full
+        rebuild.
 
 ## Open questions
 
