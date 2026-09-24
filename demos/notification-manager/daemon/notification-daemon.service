@@ -1,0 +1,33 @@
+# Manual/non-Nix install path. On a home-manager system, prefer
+# flake.nix's `homeManagerModules.default` instead -
+# `services.hyprlui-notification-daemon.enable = true;` generates this
+# exact unit declaratively (using the `notification-daemon` package
+# output - a wrapped executable, no `nix develop` indirection) and is a
+# single boolean to flip on/off, no manual symlink/`systemctl --user
+# enable`/mask-juggling required. Don't run both at once - they'd fight
+# over the same BusName, same as mako did.
+[Unit]
+Description=HyprLUI notification daemon (org.freedesktop.Notifications)
+Documentation=file:%h/dev/HyprLUI/demos/notification-manager/daemon/notification-daemon.lua
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+# Type=dbus + BusName - matches mako.service's own convention (see
+# /etc/profiles/per-user/*/share/systemd/user/mako.service): systemd
+# waits for org.freedesktop.Notifications to actually be claimed before
+# considering this unit "started", not just for the process to launch.
+Type=dbus
+BusName=org.freedesktop.Notifications
+# %h/dev/HyprLUI is where this repo happens to live for the person this
+# was written for - adjust HYPRLUI_DIR if yours is cloned elsewhere.
+# `nix develop .#notification-daemon` (a lightweight shell - see
+# flake.nix - not the full C++ default one) puts lua5.1 + ldbus +
+# luasocket on PATH without running a `meson setup --reconfigure` on
+# every service start.
+Environment=HYPRLUI_DIR=%h/dev/HyprLUI
+ExecStart=/bin/sh -c 'cd "$HYPRLUI_DIR" && exec nix develop .#notification-daemon --command lua demos/notification-manager/daemon/notification-daemon.lua'
+Restart=on-failure
+
+[Install]
+WantedBy=graphical-session.target

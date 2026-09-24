@@ -66,3 +66,6 @@ which_key.test_binds()
 
 local task_checks = require("./demos/task-checks")
 task_checks.test_binds()
+
+local notification_manager = require("./demos/notification-manager/notification-manager")
+notification_manager.setup()
