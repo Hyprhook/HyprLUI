@@ -9,21 +9,20 @@ local M = {}
 -- toast card stacked top-right, auto-dismissing after a per-urgency
 -- timeout (or on click).
 --
--- No dynamic list-mutation API exists yet (no add_child/insert_widget -
--- see LuaBridge.cpp's full mutator list) - every add/remove rebuilds the
--- whole notification-stack window from the current in-memory list,
--- remove_canvas + window() each time, same pattern every other demo
--- already uses for its own toggle-window. No reflow animation either -
--- a dismissed notification's siblings below it snap to their new
--- position instantly, they don't slide (arrangeChildren() has no such
--- concept - see DESIGN.md's own notes on this from when it came up
--- designing the daemon side).
+-- Each card is added/removed via hyprlui.add_widget()/remove_widget()
+-- (TASKS.md's own task 1) - a persistent widget tree the window keeps
+-- across notifications, not a remove_canvas+window() rebuild-from-
+-- scratch every time (the old approach - see git history). That's also
+-- what makes animationIn/animationOut/animationLayout (task 2) on each
+-- card actually fire: a freshly-rebuilt-every-frame widget never had a
+-- "just became visible"/"just moved" transition to animate in the first
+-- place.
 
--- See demos/which-key.lua's identical block for why this isn't a plain
--- require("./demos/jsondecode") - that resolves relative to the MAIN
--- CONFIG's own directory, not this file's, and breaks outside HyprLUI's
--- own dev hyprlandd.lua (confirmed live via which-key.lua's own module-
--- not-found failure).
+-- require("./demos/jsondecode") resolves relative to the MAIN CONFIG's
+-- own directory, not this file's - breaks outside HyprLUI's own dev
+-- hyprlandd.lua (confirmed live). Locate it relative to THIS file's own
+-- path instead, via debug.getinfo - see demos/which-key.lua's identical
+-- block.
 local scriptDir = debug.getinfo(1, "S").source:match("^@(.*/)")
 package.path = scriptDir .. "../?.lua;" .. package.path
 local jsonDecode = require("jsondecode").decode
@@ -42,72 +41,32 @@ local URGENCY = {
 	[2] = { color = 0xfff38ba8, timeout = nil },
 }
 
-local notifications = {} -- ordered list of { id, appName, summary, body, color }
+local liveIds = {} -- set of notification ids currently rendered as a card
+local windowCreated = false
+
+-- Deliberately slower + a bouncy spring (real overshoot, not just a
+-- smooth ease) instead of a quick plain fade - stress-tests the damage/
+-- positioning machinery harder, since content spends longer near (and
+-- past, on the overshoot) its final bounds instead of snapping through
+-- it in a couple of frames. This is how the reflow-ghosting bug (see
+-- TASKS.md task 2) actually got caught - keep it this obvious for now.
+hl.curve("hyprlui_notification_bounce", { type = "spring", stiffness = 120, dampening = 8, mass = 1 })
+local CARD_ANIM_IN = { speed = 6, spring = "hyprlui_notification_bounce", style = "slide right" }
+local CARD_ANIM_OUT = { speed = 6, spring = "hyprlui_notification_bounce", style = "slide right" }
+local CARD_ANIM_LAYOUT = { speed = 8, spring = "hyprlui_notification_bounce" }
 
 local function warn(label, err)
 	hl.notification.create({ text = label .. " failed: " .. tostring(err), timeout = 3000 })
 end
 
-local function findIndexById(id)
-	for i, n in ipairs(notifications) do
-		if n.id == id then
-			return i
-		end
-	end
-	return nil
-end
-
 --------------------------------------------------
----- rendering ----
+---- window/card lifecycle ----
 --------------------------------------------------
--- Card layout: a Stack with the Box (background/border/click target)
--- and the two Text labels as SIBLINGS, not nested inside the Box - Box
--- never renders children (only Button/Input do, see docs/api.md's own
--- note on this, found the hard way building demos/task-checks.lua).
-local function render()
-	hl.plugin.hyprlui.remove_canvas(WINDOW_NAME)
-	if #notifications == 0 then
+-- The window itself is created once, empty, and never rebuilt - only
+-- individual cards get added/removed from its root Column from here on.
+local function ensureWindow()
+	if windowCreated then
 		return
-	end
-
-	local cards = {}
-	for _, n in ipairs(notifications) do
-		local id = n.id
-		local title = n.appName ~= "" and (n.appName .. ": " .. n.summary) or n.summary
-		cards[#cards + 1] = hl.plugin.hyprlui.Stack({
-			id = "card_" .. id,
-			w = CARD_WIDTH,
-			h = 64,
-			hl.plugin.hyprlui.Box({
-				id = "bg_" .. id,
-				fill = true,
-				color = 0xff1e1e2e,
-				rounding = 8,
-				borderColor = n.color,
-				borderWidth = 2,
-				onClick = function()
-					M.dismiss(id)
-				end,
-			}),
-			hl.plugin.hyprlui.Text({
-				id = "summary_" .. id,
-				x = 12,
-				y = 8,
-				text = title,
-				maxW = CARD_WIDTH - 24,
-				size = 13,
-				color = 0xffcdd6f4,
-			}),
-			hl.plugin.hyprlui.Text({
-				id = "body_" .. id,
-				x = 12,
-				y = 30,
-				text = n.body,
-				maxW = CARD_WIDTH - 24,
-				size = 12,
-				color = 0xffa6adc8,
-			}),
-		})
 	end
 
 	local ok, err = pcall(function()
@@ -116,27 +75,88 @@ local function render()
 			anchor = "top-right",
 			x = 16,
 			y = 16,
-			hl.plugin.hyprlui.Column({
-				id = "root",
-				gap = 8,
-				table.unpack(cards),
-			}),
+			hl.plugin.hyprlui.Column({ id = "root", gap = 8 }),
 		})
 	end)
 	if not ok then
 		warn("hyprlui.window (notification-manager)", err)
+		return
 	end
+	windowCreated = true
+end
+
+-- Card layout: a Stack with the Box (background/border/click target)
+-- and the two Text labels as SIBLINGS, not nested inside the Box - Box
+-- never renders children (only Button/Input do, see docs/api.md's own
+-- note on this, found the hard way building demos/task-checks.lua).
+local function addCard(n)
+	local title = n.appName ~= "" and (n.appName .. ": " .. n.summary) or n.summary
+	local id = n.id
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.add_widget(
+			WINDOW_NAME,
+			"root",
+			hl.plugin.hyprlui.Stack({
+				id = "card_" .. id,
+				w = CARD_WIDTH,
+				h = 64,
+				animationIn = CARD_ANIM_IN,
+				animationOut = CARD_ANIM_OUT,
+				-- Lets THIS card slide smoothly into a new slot when a
+				-- sibling above it is dismissed, instead of snapping -
+				-- animationOut (above, on the card actually being
+				-- removed) stopping its own layout space immediately is
+				-- what makes that reflow start at the same time as the
+				-- dismissed card's own fade-out, not after it.
+				animationLayout = CARD_ANIM_LAYOUT,
+				hl.plugin.hyprlui.Box({
+					id = "bg_" .. id,
+					fill = true,
+					color = 0xff1e1e2e,
+					rounding = 8,
+					borderColor = n.color,
+					borderWidth = 2,
+					onClick = function()
+						M.dismiss(id)
+					end,
+				}),
+				hl.plugin.hyprlui.Text({
+					id = "summary_" .. id,
+					x = 12,
+					y = 8,
+					text = title,
+					maxW = CARD_WIDTH - 24,
+					size = 13,
+					color = 0xffcdd6f4,
+				}),
+				hl.plugin.hyprlui.Text({
+					id = "body_" .. id,
+					x = 12,
+					y = 30,
+					text = n.body,
+					maxW = CARD_WIDTH - 24,
+					size = 12,
+					color = 0xffa6adc8,
+				}),
+			})
+		)
+	end)
+	if not ok then
+		warn("hyprlui.add_widget (notification-manager)", err)
+		return
+	end
+	liveIds[id] = true
 end
 
 -- Idempotent - a click-dismiss racing an already-fired auto-dismiss
 -- timer (or vice versa) just no-ops the second call, not an error.
 function M.dismiss(id)
-	local idx = findIndexById(id)
-	if not idx then
+	if not liveIds[id] then
 		return
 	end
-	table.remove(notifications, idx)
-	render()
+	liveIds[id] = nil
+	hl.plugin.hyprlui.remove_widget(WINDOW_NAME, "card_" .. id)
 end
 
 --------------------------------------------------
@@ -154,21 +174,23 @@ local function handleNotify(event)
 	end
 	-- expireTimeout == 0 means "never auto-dismiss" - dwellMs stays nil either way in that case
 
-	local entry = {
+	ensureWindow()
+
+	-- replaces_id: no in-place update mutator exists yet (DESIGN.md task
+	-- 9) - swap the card out for a fresh one instead. Loses continuity
+	-- for that one update (a visible out-then-in instead of a smooth
+	-- content swap), acceptable until task 9 lands.
+	if liveIds[event.id] then
+		M.dismiss(event.id)
+	end
+
+	addCard({
 		id = event.id,
 		appName = event.appName or "",
 		summary = event.summary or "",
 		body = event.body or "",
 		color = style.color,
-	}
-
-	local idx = findIndexById(event.id)
-	if idx then
-		notifications[idx] = entry -- replaces_id: update in place, don't reorder/duplicate
-	else
-		table.insert(notifications, entry)
-	end
-	render()
+	})
 
 	if dwellMs then
 		hl.timer(function()
@@ -229,7 +251,8 @@ end
 -- fresh each time rather than needing any reconnect-on-drop logic of
 -- its own).
 function M.setup()
-	notifications = {}
+	liveIds = {}
+	windowCreated = false
 	hl.plugin.hyprlui.open_socket(SOCKET_PATH, function(sock)
 		if not sock then
 			warn(

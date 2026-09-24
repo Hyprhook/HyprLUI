@@ -283,6 +283,7 @@ namespace HyprLUI::Lua {
             // hyprlui.animation() config for that leaf.
             widget->setAnimationInOverride(optAnimationOverrideField(L, idx, "animationIn", "hyprlui"));
             widget->setAnimationOutOverride(optAnimationOverrideField(L, idx, "animationOut", "hyprlui"));
+            widget->setLayoutAnimation(optAnimationOverrideField(L, idx, "animationLayout", "hyprlui"));
 
             // Fixed-size override - meaningful for containers (whose w/h
             // are genuinely optional) and Image (size-to-content unless

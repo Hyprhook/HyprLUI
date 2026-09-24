@@ -98,10 +98,10 @@ namespace HyprLUI {
         CBox                    fullDamageBox() const {
             const double slideLeft = std::max(0.0, -m_styleOffset.x), slideRight = std::max(0.0, m_styleOffset.x);
             const double slideTop = std::max(0.0, -m_styleOffset.y), slideBottom = std::max(0.0, m_styleOffset.y);
-            const double left   = m_debugOverflow.left + EDGE_ROUNDING_PAD + slideLeft;
-            const double top    = m_debugOverflow.top + EDGE_ROUNDING_PAD + slideTop;
-            const double right  = m_debugOverflow.right + EDGE_ROUNDING_PAD + slideRight;
-            const double bottom = m_debugOverflow.bottom + EDGE_ROUNDING_PAD + slideBottom;
+            const double left   = m_debugOverflow.left + m_renderOverflow.left + EDGE_ROUNDING_PAD + slideLeft;
+            const double top    = m_debugOverflow.top + m_renderOverflow.top + EDGE_ROUNDING_PAD + slideTop;
+            const double right  = m_debugOverflow.right + m_renderOverflow.right + EDGE_ROUNDING_PAD + slideRight;
+            const double bottom = m_debugOverflow.bottom + m_renderOverflow.bottom + EDGE_ROUNDING_PAD + slideBottom;
             return {{m_position.x - left, m_position.y - top}, {m_size.x + left + right, m_size.y + top + bottom}};
         }
 
@@ -310,8 +310,9 @@ namespace HyprLUI {
         std::vector<std::function<void()>>   m_bindings;
         uint64_t                             m_sequence = 0;
         std::function<void(const Vector2D&)> m_onSizeChanged;
-        SEdgeInsets                          m_debugOverflow; // how far the debug overlay currently draws beyond box() on each side - see fullDamageBox()
-        Vector2D                             m_styleOffset;   // m_root->styleOffset() (slide only), cached here each render() frame for fullDamageBox() to read
+        SEdgeInsets                          m_debugOverflow;  // how far the debug overlay currently draws beyond box() on each side - see fullDamageBox()
+        SEdgeInsets                          m_renderOverflow; // same, for the real content - a fading-out/layoutOffset()-lagging widget, see fullDamageBox()
+        Vector2D                             m_styleOffset;    // m_root->styleOffset() (slide only), cached here each render() frame for fullDamageBox() to read
     };
 
     using PCanvas = std::shared_ptr<CCanvas>;

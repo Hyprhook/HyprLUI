@@ -208,6 +208,24 @@ widget that's interactive - either structurally (`Button`/`Input`/
   })
   ```
 
+- **`animationLayout`** - optional table, same shape/parsing as
+  `animationIn`/`animationOut` (`style` is accepted but has no effect
+  here - there's no slide/popin transform to layer, this animates the
+  widget's own true position, not a visibility fade). Disabled (instant,
+  snapping) by default. When enabled, this widget smoothly slides to a
+  new position whenever its parent's layout (`Row`/`Column`) moves it -
+  e.g. a sibling being added/removed - instead of snapping there
+  instantly. Has no effect on this widget's very first layout pass (it
+  never "flies in" from `{0,0}` on creation - use `animationIn` for
+  that); only a position *change* after that animates.
+  - A `Row`/`Column` also stops reserving a fading-out child's flow
+    space (`remove_widget()`'s own `animationOut`, or a plain
+    `set_widget_visible(false)` with one) immediately once it starts
+    fading, not once it's actually removed - so with both
+    `animationOut` (on the disappearing widget) and `animationLayout`
+    (on its still-visible siblings) set, a dismissal and the resulting
+    reflow happen at the same time, not one after the other.
+
 - **`fill`** - boolean, default `false`. "Stretch to match my parent's
   available size instead of sizing from my own content" (CSS
   `align-self: stretch`, not `flex-grow`). Interpreted per parent:
@@ -462,7 +480,17 @@ any still-in-flight command/socket is torn down on the next config reload.
 - **`get_checkbox_checked(window, id)`** - returns a `Checkbox`'s current
   state.
 - **`remove_widget(window, id)`** - removes a single widget (and its
-  subtree); blurs it first if it held keyboard focus.
+  subtree); blurs it first if it held keyboard focus. Animates out first
+  (`animationOut`, if enabled) before actually erasing it.
+- **`add_widget(window, parentId, widgetSpec)`** - builds `widgetSpec`
+  (any `Stack{}`/`Row{}`/`Column{}`/`Text{}`/`Box{}`/etc. table, exactly
+  like one passed to `window{}` itself) and appends it as a new child of
+  the widget named `parentId`, without rebuilding the rest of the
+  window's tree. Errors if `parentId` doesn't exist, or if `widgetSpec`
+  reuses an id already present anywhere in the window (ids must stay
+  unique per window - see `remove_widget`/`set_text`/etc.'s own
+  first-match addressing). Append-only - the new widget always ends up
+  last among `parentId`'s children; no insert-at-index/prepend yet.
 - **`focus_widget(window, id)`** - gives HyprLUI's keyboard focus to the
   named `Input` programmatically. Errors if `id` isn't an `Input`. A no-op
   if it's already focused.

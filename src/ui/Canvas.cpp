@@ -101,6 +101,25 @@ namespace HyprLUI {
         // is concerned.
         m_root->render(m_position, 1.0F);
 
+        // How far the tree's ACTUAL rendered content currently extends
+        // beyond box() on each side - a fading-out widget (still drawn,
+        // frozen at its old position - see CFlexWidget's own handling of
+        // isFadingOut()) or a layoutOffset()-lagging one's in-flight
+        // position can both extend beyond what this frame's settled
+        // m_size reports, same class of issue renderDebug()'s own
+        // overflow already exists for, just for the real content instead
+        // of the debug overlay. One-frame-stale/self-correcting, same as
+        // m_debugOverflow below.
+        m_renderOverflow          = {};
+        const auto renderedBounds = m_root->renderedBounds(m_position);
+        if (renderedBounds) {
+            const auto b            = box();
+            m_renderOverflow.left   = std::max(0.0, b.pos().x - renderedBounds->pos().x);
+            m_renderOverflow.top    = std::max(0.0, b.pos().y - renderedBounds->pos().y);
+            m_renderOverflow.right  = std::max(0.0, (renderedBounds->pos().x + renderedBounds->size().x) - (b.pos().x + b.size().x));
+            m_renderOverflow.bottom = std::max(0.0, (renderedBounds->pos().y + renderedBounds->size().y) - (b.pos().y + b.size().y));
+        }
+
         // Debug overlay is an entirely separate pass, run after normal
         // content so it always paints on top regardless of z-index/
         // opacity. A fresh SDebugSpec{} means "nothing enabled, everything

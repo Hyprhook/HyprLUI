@@ -620,6 +620,45 @@ namespace HyprLUI::Lua {
             return 0;
         }
 
+        // Adds one widget (built the same way window{}'s own root/children
+        // are, via buildWidget()) to an existing window's tree at runtime,
+        // without rebuilding the whole thing. Appends only - paints/lays
+        // out after whatever the parent already has, matching addChild()'s
+        // own append-only semantics; no insert-at-index/prepend yet, add
+        // if something actually needs it.
+        int luaAddWidget(lua_State* L) {
+            const std::string canvasName = luaL_checkstring(L, 1);
+            const std::string parentId   = luaL_checkstring(L, 2);
+            luaL_checktype(L, 3, LUA_TTABLE);
+
+            auto canvas = CUIManager::get().getCanvas(canvasName);
+            if (!canvas || !canvas->root())
+                return luaL_error(L, "hyprlui.add_widget: no window named '%s'", canvasName.c_str());
+
+            auto* parent = canvas->root()->findWidget(parentId);
+            if (!parent)
+                return luaL_error(L, "hyprlui.add_widget: no widget named '%s' on window '%s'", parentId.c_str(), canvasName.c_str());
+
+            // Seeded with every id already in the tree, not just the new
+            // subtree - buildWidget()'s own duplicate-id check then also
+            // catches a collision against an EXISTING widget for free (the
+            // same error a static duplicate-id-within-one-window{} call
+            // already gives).
+            std::unordered_set<std::string> seenIds;
+            canvas->root()->collectIds(seenIds);
+
+            int                                autoId = 0;
+            std::vector<std::function<void()>> bindings;
+            auto                               child = buildWidget(L, 3, autoId, bindings, seenIds);
+
+            for (auto& b : bindings)
+                canvas->addBinding(std::move(b));
+
+            parent->addChild(std::move(child));
+            canvas->damage();
+            return 0;
+        }
+
         int luaWatch(lua_State* L) {
             const std::string name = luaL_checkstring(L, 1);
             luaL_checktype(L, 2, LUA_TFUNCTION);
@@ -859,6 +898,7 @@ namespace HyprLUI::Lua {
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "set_checkbox_checked", &luaSetCheckboxChecked);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "get_checkbox_checked", &luaGetCheckboxChecked);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "remove_widget", &luaRemoveWidget);
+        HyprlandAPI::addLuaFunction(handle, "hyprlui", "add_widget", &luaAddWidget);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "watch", &luaWatch);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "notify", &luaNotify);
         HyprlandAPI::addLuaFunction(handle, "hyprlui", "persistent", &luaPersistent);
@@ -898,6 +938,7 @@ namespace HyprLUI::Lua {
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "set_checkbox_checked");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "get_checkbox_checked");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "remove_widget");
+        HyprlandAPI::removeLuaFunction(handle, "hyprlui", "add_widget");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "watch");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "notify");
         HyprlandAPI::removeLuaFunction(handle, "hyprlui", "persistent");

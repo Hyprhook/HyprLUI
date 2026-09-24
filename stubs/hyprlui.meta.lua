@@ -223,6 +223,7 @@
 ---@field onClick? HyprLUI.OnClickFn
 ---@field animationIn? HyprLUI.AnimationOverride
 ---@field animationOut? HyprLUI.AnimationOverride
+---@field animationLayout? HyprLUI.AnimationOverride
 ---@field fill? boolean
 ---@field [integer] HyprLUI.WidgetSpec
 
@@ -470,6 +471,7 @@
 ---@field set_checkbox_checked fun(window: string, id: string, checked: boolean): nil
 ---@field get_checkbox_checked fun(window: string, id: string): boolean
 ---@field remove_widget fun(window: string, id: string): nil
+---@field add_widget fun(window: string, parentId: string, widgetSpec: HyprLUI.WidgetSpec): nil
 ---@field watch HyprLUI.WatchFn
 ---@field notify fun(name: string): nil
 ---@field Bind fun(name: string): HyprLUI.BindMarker

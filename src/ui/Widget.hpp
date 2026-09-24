@@ -22,6 +22,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace HyprLUI {
@@ -236,7 +237,7 @@ namespace HyprLUI {
             if (!m_visible)
                 return;
             const float    opacity     = composedOpacity(parentOpacity);
-            const Vector2D basePos     = origin + (m_position + styleOffset()) * scale;
+            const Vector2D basePos     = origin + (m_position + styleOffset() + layoutOffset()) * scale;
             const auto     local       = popinTransform();
             const Vector2D childOrigin = basePos + local.offset * scale;
             const Vector2D childScale  = scale * local.scale;
@@ -260,6 +261,16 @@ namespace HyprLUI {
             return nullptr;
         }
 
+        // Collects every id in this subtree (self included) - used by
+        // add_widget() to seed buildWidget()'s own duplicate-id check
+        // against the whole existing tree, not just the new subtree being
+        // built.
+        void collectIds(std::unordered_set<std::string>& out) const {
+            out.insert(m_id);
+            for (auto& child : m_children)
+                child->collectIds(out);
+        }
+
         // Finds the topmost interactive widget whose bounds contain
         // `point`, searching this widget's subtree (`origin` = parent's
         // already-accumulated absolute position). Default: not interactive
@@ -274,7 +285,7 @@ namespace HyprLUI {
             if (!m_visible)
                 return nullptr;
 
-            const Vector2D basePos     = origin + (m_position + styleOffset()) * scale;
+            const Vector2D basePos     = origin + (m_position + styleOffset() + layoutOffset()) * scale;
             const auto     local       = popinTransform();
             const Vector2D childOrigin = basePos + local.offset * scale;
             const Vector2D childScale  = scale * local.scale;
@@ -422,6 +433,16 @@ namespace HyprLUI {
             m_animationOutOverride = std::move(config);
         }
 
+        // Per-widget `animationLayout` override - same shape/parsing as
+        // animationIn/animationOut (optAnimationOverrideField()), but
+        // drives setPosition()'s own reflow transition instead of a
+        // visibility fade. nullptr (the default) means disabled - a
+        // parent's arrangeChildren() moving this widget snaps instantly,
+        // same as before this existed.
+        void setLayoutAnimation(SP<Hyprutils::Animation::SAnimationPropertyConfig> config) {
+            m_layoutAnimConfig = std::move(config);
+        }
+
         // Instant by default - only animates if the relevant leaf (IN when
         // becoming visible, OUT when becoming hidden) resolves enabled
         // (this widget's own override if it has one, else the global
@@ -442,6 +463,18 @@ namespace HyprLUI {
         }
         bool visible() const {
             return m_visible;
+        }
+
+        // True while actively fading toward invisible - m_visible itself
+        // stays true for this whole stretch (see setVisible()'s own doc
+        // comment), so this is the only way to tell "about to disappear"
+        // apart from "staying visible". CFlexWidget's own layout uses
+        // this to stop reserving a fading-out child's flow space
+        // immediately (so its siblings can reflow into the gap it's
+        // leaving right away), rather than waiting for the fade - and,
+        // for remove_widget(), the actual removal - to finish first.
+        bool isFadingOut() const {
+            return m_visibilityAnim && m_visibilityAnim->isBeingAnimated() && m_visibilityAnim->goal() == 0.0f;
         }
 
         // Forces this widget fully hidden with no animation/end-callback -
@@ -486,17 +519,54 @@ namespace HyprLUI {
         virtual bool isAnimating() const {
             if (m_visibilityAnim && m_visibilityAnim->isBeingAnimated())
                 return true;
+            if (m_layoutAnim && m_layoutAnim->isBeingAnimated())
+                return true;
             for (auto& child : m_children)
                 if (child->isAnimating())
                     return true;
             return false;
         }
 
+        // Snaps instantly unless animationLayout is set (see
+        // setLayoutAnimation()) AND this isn't the very first call ever
+        // for this widget (a brand-new widget's first layout pass must
+        // NOT animate in from {0,0}/its constructor position - that's
+        // animationIn's job, not this one's). A later call that lands on
+        // the same position is always a no-op, animated or not.
         void setPosition(const Vector2D& position) {
-            m_position = position;
+            if (m_hasBeenPositioned && position == m_position)
+                return;
+
+            const bool     animate = m_hasBeenPositioned && m_layoutAnimConfig && m_layoutAnimConfig->internalEnabled != 0;
+            const Vector2D from    = m_position;
+            m_position             = position;
+            m_hasBeenPositioned    = true;
+
+            if (!animate) {
+                if (m_layoutAnim)
+                    m_layoutAnim->setValueAndWarp(position); // stays in sync so re-enabling later doesn't jump from a stale value
+                return;
+            }
+
+            if (!m_layoutAnim)
+                Animation::mgr()->createAnimation(from, m_layoutAnim, m_layoutAnimConfig, AVARDAMAGE_NONE);
+            else
+                m_layoutAnim->setConfig(m_layoutAnimConfig);
+            *m_layoutAnim = position;
         }
         const Vector2D& position() const {
             return m_position;
+        }
+
+        // The gap between this widget's true position() and where it's
+        // still visually animating from, while a layout-driven reflow
+        // (see setPosition()/setLayoutAnimation()) is in flight - {0,0}
+        // otherwise. Added into every position() read at render/hitTest
+        // time, same as styleOffset() already is, so both this and an
+        // in-flight visibility slide (a genuinely different animation)
+        // can be active on the same widget at once without conflicting.
+        Vector2D layoutOffset() const {
+            return m_layoutAnim ? m_layoutAnim->value() - m_position : Vector2D{0, 0};
         }
 
         void setSize(const Vector2D& size) {
@@ -688,7 +758,7 @@ namespace HyprLUI {
         // popinTransform() (NOT including this widget's own, applied on
         // top via popinTransform() below).
         CBox boxAt(const Vector2D& origin, const Vector2D& scale = {1, 1}) const {
-            const Vector2D basePos = origin + (m_position + styleOffset()) * scale;
+            const Vector2D basePos = origin + (m_position + styleOffset() + layoutOffset()) * scale;
             const auto     local   = popinTransform();
             return {basePos + local.offset * scale, m_size * scale * local.scale};
         }
@@ -726,6 +796,20 @@ namespace HyprLUI {
         // just outside a widget's own box, so CCanvas needs this to know
         // how far beyond the normal content box to damage.
         std::optional<CBox> renderDebug(const Vector2D& origin, const SDebugSpec& inherited);
+
+        // Union of every VISIBLE widget's current boxAt() in this subtree
+        // (self included) - unlike measure()'s own settled m_size, this
+        // reflects whatever's ACTUALLY being drawn right now: a fading-
+        // out child (CFlexWidget excludes it from layout flow once it
+        // starts fading, not from rendering - it's still drawn, frozen at
+        // its last position, for the rest of the fade) or any
+        // layoutOffset()-lagging widget's in-flight animated position,
+        // both of which can extend beyond what a settled-state size
+        // calculation would report. Lets CCanvas know how far beyond its
+        // own content box to damage while something's animating - same
+        // reasoning as renderDebug()'s own returned bounds, just for the
+        // real render pass instead of the debug overlay.
+        std::optional<CBox> renderedBounds(const Vector2D& origin, const Vector2D& scale = {1, 1}) const;
 
       public:
         // Snapshots this widget's current m_size as its own natural/
@@ -784,6 +868,10 @@ namespace HyprLUI {
         PHLANIMVAR<float>                                  m_visibilityAnim; // lazily created only once setVisible() actually animates, see CWidgetAnimations
         SP<Hyprutils::Animation::SAnimationPropertyConfig> m_animationInOverride,
             m_animationOutOverride; // per-widget animationIn/animationOut override, null = use the global config
+
+        PHLANIMVAR<Vector2D>                               m_layoutAnim;                // lazily created only once setPosition() actually animates
+        SP<Hyprutils::Animation::SAnimationPropertyConfig> m_layoutAnimConfig;          // per-widget animationLayout override, null = disabled (default)
+        bool                                               m_hasBeenPositioned = false; // false until the first setPosition() call - see its own doc comment
 
       private:
         // Merges m_debugSpec into `inherited` ("mine wins per-field if

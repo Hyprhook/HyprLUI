@@ -128,6 +128,24 @@ namespace HyprLUI {
         return bounds;
     }
 
+    std::optional<CBox> CWidget::renderedBounds(const Vector2D& origin, const Vector2D& scale) const {
+        if (!m_visible)
+            return std::nullopt;
+
+        CBox           bounds = boxAt(origin, scale);
+
+        const Vector2D basePos     = origin + (m_position + styleOffset() + layoutOffset()) * scale;
+        const auto     local       = popinTransform();
+        const Vector2D childOrigin = basePos + local.offset * scale;
+        const Vector2D childScale  = scale * local.scale;
+
+        for (auto& child : m_children) {
+            if (auto childBounds = child->renderedBounds(childOrigin, childScale))
+                expandBounds(bounds, *childBounds);
+        }
+        return bounds;
+    }
+
     CBox CWidget::drawDebugOverlay(const Vector2D& origin, const SDebugSpec& resolved) const {
         const CBox box       = boxAt(origin);
         const bool bigEnough = box.size().x >= AUTO_MIN_W && box.size().y >= AUTO_MIN_H;

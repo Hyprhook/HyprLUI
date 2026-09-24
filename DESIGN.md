@@ -702,7 +702,7 @@ in full. Tracked here going forward instead of as numbered phases.
         pattern - this one was real and worth catching before a full
         rebuild.
 
-- [ ] **17. Overlay renders over the cursor** - found live running on real
+- [x] **17. Overlay renders over the cursor** - found live running on real
       hardware (nvidia, not the nested-Hyprland dev setup this project was
       previously tested under, where it never showed up): `RenderHook.cpp`
       hooked `RENDER_LAST_MOMENT`, which fires AFTER Hyprland's own cursor
@@ -720,7 +720,9 @@ in full. Tracked here going forward instead of as numbered phases.
       "before cursor" - a real fix needs a new Hyprland render stage there
       (e.g. `RENDER_POST_CURSOR`, or splitting cursor render into its own
       explicit stage boundary) - **needs a Hyprland PR**, tracked here
-      until that lands and HyprLUI can switch to it.
+      until that lands and HyprLUI can switch to it. `RENDER_POST_WINDOWS`
+      workaround confirmed live on the same nvidia host that surfaced the
+      bug - cursor renders correctly again.
 
 ## Open questions
 

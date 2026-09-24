@@ -53,6 +53,16 @@ namespace HyprLUI {
 
         bool   first = true;
         for (const auto& child : m_children) {
+            // A fading-out child (remove_widget()'s own animateOut, or a
+            // plain setVisible(false) with an out-animation) stops
+            // reserving flow space immediately, not once it's actually
+            // erased - lets its siblings reflow into the gap right away.
+            // It's still rendered (at wherever arrangeChildren() last put
+            // it) for the rest of its fade, just no longer part of the
+            // flow.
+            if (child->isFadingOut())
+                continue;
+
             if (!first)
                 main += m_gap;
             first = false;
@@ -113,6 +123,11 @@ namespace HyprLUI {
 
         double       offset = mainPadLead;
         for (const auto& child : m_children) {
+            // Frozen at its last position for the rest of its fade - see
+            // measureContent()'s own comment on why.
+            if (child->isFadingOut())
+                continue;
+
             const auto&  m            = child->margin();
             const double childMain    = m_direction == EFlexDirection::Row ? child->size().x : child->size().y;
             double       childCross   = m_direction == EFlexDirection::Row ? child->size().y : child->size().x;
