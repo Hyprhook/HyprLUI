@@ -253,16 +253,18 @@ end
 function M.setup()
 	liveIds = {}
 	windowCreated = false
-	hl.plugin.hyprlui.open_socket(SOCKET_PATH, function(sock)
-		if not sock then
-			warn(
-				"hyprlui notification-manager",
-				"could not connect to " .. SOCKET_PATH .. " - is notification-daemon.service running?"
-			)
-			return
-		end
-		startReadLoop(sock)
-	end)
+	if hl.plugin.hyprlui ~= nil then
+		hl.plugin.hyprlui.open_socket(SOCKET_PATH, function(sock)
+			if not sock then
+				warn(
+					"hyprlui notification-manager",
+					"could not connect to " .. SOCKET_PATH .. " - is notification-daemon.service running?"
+				)
+				return
+			end
+			startReadLoop(sock)
+		end)
+	end
 end
 
 return M
