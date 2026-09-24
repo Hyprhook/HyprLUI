@@ -10,6 +10,8 @@
 
 struct lua_State;
 
+#include "../Widget.hpp" // EMouseButton
+
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -30,5 +32,8 @@ namespace HyprLUI::Lua {
     // `onScroll(delta, vertical)` - delta is the raw axis-event value,
     // forwarded as-is, unnormalized.
     std::function<void(double, bool)> fieldOnScroll(lua_State* L, int idx);
+
+    // `onClick(button)` - button is "left", "right", or "middle".
+    std::function<void(EMouseButton)> fieldOnClick(lua_State* L, int idx);
 
 } // namespace HyprLUI::Lua

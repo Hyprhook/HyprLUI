@@ -101,9 +101,9 @@ for its own type:
   panel + content layered over it, not nested).
 - **`Button{ id, x = 0, y = 0, w, h, color, rounding = 0, borderColor, borderWidth = 0, visible, onClick, <children...> }`**
   - like `Box`, but always a real click target structurally, even with no
-  `onClick` set (left-click only). Children are positioned
-  manually/absolutely inside it, same as `Stack` - typically a `Text`
-  label. Only `Overlay`-zorder windows (the default) are clickable;
+  `onClick` set - left, right, and middle click all count. Children are
+  positioned manually/absolutely inside it, same as `Stack` - typically a
+  `Text` label. Only `Overlay`-zorder windows (the default) are clickable;
   `Background` windows are decorative. A `Button`'s own bounds are the
   only clickable area.
 - **`Input{ id, x = 0, y = 0, w, h, color, rounding = 0, borderColor, borderWidth = 0, visible, text = "", textColor, textSize = 14, textFont = "sans", onChange, onKey, onFocus, onBlur, <children...> }`**
@@ -151,13 +151,16 @@ widget that's interactive - either structurally (`Button`/`Input`/
 `Checkbox`) or because `onClick`/`onScroll` below was set. A decorative
 `Box` with neither is inert.
 
-- **`onClick`** - a plain no-argument callback. What actually *makes* a
-  widget a real click target for anything that isn't already one
+- **`onClick(button)`** - `button` is `"left"`, `"right"`, or `"middle"`,
+  all three sharing the same press-must-land-on-the-same-widget-and-
+  button-as-release semantics `Button` always has. What actually *makes*
+  a widget a real click target for anything that isn't already one
   structurally - set this on a `Box`/`Text`/`Image`/`Row`/`Column`/`Stack`
-  to make that specific widget clickable, with the same
-  press-must-land-on-the-same-widget-as-release semantics `Button` always
-  has. A child's own click target (if any) always gets first refusal over
-  an ancestor's `onClick`. Errors are caught and logged, not propagated.
+  to make that specific widget clickable. A child's own click target (if
+  any) always gets first refusal over an ancestor's `onClick`. `Checkbox`
+  toggles on left-click only (its own `onChange`, not `onClick`) - right/
+  middle-click on a `Checkbox` does nothing. Errors are caught and
+  logged, not propagated.
 - **`disabled`** - boolean, default `false`. Excludes the widget from
   hit-testing entirely - click-through/unfocusable, while it still
   renders. Mutable at runtime via `set_widget_disabled()`.

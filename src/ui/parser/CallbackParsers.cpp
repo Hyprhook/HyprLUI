@@ -138,4 +138,29 @@ namespace HyprLUI::Lua {
         };
     }
 
+    std::function<void(EMouseButton)> fieldOnClick(lua_State* L, int idx) {
+        lua_getfield(L, idx, "onClick");
+        if (!lua_isfunction(L, -1)) {
+            lua_pop(L, 1);
+            return {};
+        }
+
+        const int ref   = luaL_ref(L, LUA_REGISTRYINDEX);
+        auto      fnRef = std::make_shared<SLuaFnRef>(L, ref);
+
+        return [L, fnRef](EMouseButton button) {
+            lua_rawgeti(L, LUA_REGISTRYINDEX, fnRef->ref);
+            switch (button) {
+                case EMouseButton::Left: lua_pushstring(L, "left"); break;
+                case EMouseButton::Right: lua_pushstring(L, "right"); break;
+                case EMouseButton::Middle: lua_pushstring(L, "middle"); break;
+            }
+            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                const char* err = lua_tostring(L, -1);
+                Log::logger->log(Log::ERR, "[hyprlui] error in onClick handler: {}", err ? err : "<error object is not a string>");
+                lua_pop(L, 1);
+            }
+        };
+    }
+
 } // namespace HyprLUI::Lua

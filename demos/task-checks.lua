@@ -2,7 +2,7 @@ local M = {}
 -- task-checks.lua
 --
 -- Small demos exercising DESIGN.md's active task list items that
--- actually have observable Lua-facing behavior: tasks 1, 2, 4, 5, 6, 8, 16.
+-- actually have observable Lua-facing behavior: tasks 1, 2, 4, 5, 6, 8, 10, 16.
 -- Task 3 (LuaBridge.cpp split) is pure internal C++ restructuring with
 -- zero change to the Lua API - nothing to demo. Task 7 (Stack padding/
 -- margin) was a confirmed no-change. Not exhaustive coverage, just
@@ -432,6 +432,63 @@ local function toggleTask16()
 	task16Open = true
 end
 
+--------------------------------------------------
+---- Task 10: button-aware onClick ----
+--------------------------------------------------
+-- A plain Box (not Button) with onClick set - left/right/middle-click it
+-- and watch the label update with which button fired, proving onClick's
+-- new argument actually works, not just that it's accepted syntactically.
+
+local TASK10_WINDOW = "hyprlui_task10_demo"
+local task10Open = false
+
+local function toggleTask10()
+	if task10Open then
+		hl.plugin.hyprlui.remove_canvas(TASK10_WINDOW)
+		task10Open = false
+		return
+	end
+
+	local ok, err = pcall(function()
+		hl.plugin.hyprlui.window({
+			name = TASK10_WINDOW,
+			anchor = "center",
+			hl.plugin.hyprlui.Column({
+				id = "root",
+				gap = 8,
+				padding = 12,
+				hl.plugin.hyprlui.Text({
+					id = "title",
+					text = "task 10: button-aware onClick",
+					size = 14,
+					color = 0xffcba6f7,
+				}),
+				hl.plugin.hyprlui.Box({
+					id = "target",
+					w = 220,
+					h = 40,
+					color = 0xff313244,
+					onClick = function(button)
+						hl.plugin.hyprlui.set_text(TASK10_WINDOW, "result", "last click: " .. button)
+					end,
+					hl.plugin.hyprlui.Text({ x = 10, y = 10, text = "left/right/middle-click me", size = 12 }),
+				}),
+				hl.plugin.hyprlui.Text({
+					id = "result",
+					text = "last click: (none yet)",
+					size = 12,
+					color = 0xffa6e3a1,
+				}),
+			}),
+		})
+	end)
+	if not ok then
+		warn("hyprlui.window (task10)", err)
+		return
+	end
+	task10Open = true
+end
+
 function M.test_binds()
 	hl.bind("ALT + SHIFT + 1", toggleTask1, { description = "task-checks: toggle task 1 demo (window naming)" })
 	hl.bind("ALT + SHIFT + 2", toggleTask2, { description = "task-checks: toggle task 2 demo (Box sizing)" })
@@ -445,6 +502,11 @@ function M.test_binds()
 	hl.bind("ALT + SHIFT + 3", toggleTask6, { description = "task-checks: toggle task 6 demo (monitor-span sizing)" })
 	hl.bind("ALT + SHIFT + 7", toggleTask8, { description = "task-checks: toggle task 8 demo (text overflow modes)" })
 	hl.bind("ALT + SHIFT + 8", toggleTask16, { description = "task-checks: toggle task 16 demo (marquee text)" })
+	hl.bind(
+		"ALT + SHIFT + 9",
+		toggleTask10,
+		{ description = "task-checks: toggle task 10 demo (button-aware onClick)" }
+	)
 end
 
 return M

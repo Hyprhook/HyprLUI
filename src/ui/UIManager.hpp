@@ -73,11 +73,12 @@ namespace HyprLUI {
         // `canvasName`, if both still exist and the widget actually
         // resolved as a hit in the first place (false, no-op, otherwise).
         // Checkbox gets its own dynamic_cast branch (toggle then invoke
-        // onChange(bool) - a different shape from a plain onClick); every
-        // other widget type falls through to the generic
-        // CWidget::fireClick(). Called by InputHook.cpp once a press and
-        // its matching release both resolve to the same SWidgetHit.
-        bool clickWidget(const std::string& canvasName, const std::string& widgetId);
+        // onChange(bool) - a different shape from a plain onClick, and
+        // left-click only, unlike onClick below) - every other widget
+        // type falls through to the generic CWidget::fireClick(button).
+        // Called by InputHook.cpp once a press and its matching release
+        // (same button) both resolve to the same SWidgetHit.
+        bool clickWidget(const std::string& canvasName, const std::string& widgetId, EMouseButton button);
 
         // --- Keyboard focus (Input widgets) ------------------------------
         // Exactly one Input across every HyprLUI window can hold HyprLUI's

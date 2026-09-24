@@ -24,11 +24,15 @@ namespace HyprLUI::InputHook {
         CHyprSignalListener g_moveListener;
         CHyprSignalListener g_axisListener;
 
-        // The widget a press hit, if any - re-hit-tested and compared by
-        // value (canvas name + widget id, not a raw pointer) at release,
-        // since the widget could in principle be removed by Lua code
-        // between the two events. See UIManager.hpp's SWidgetHit.
+        // The widget a press hit, if any, plus which button - re-hit-
+        // tested and compared by value (canvas name + widget id, not a
+        // raw pointer) at release, since the widget could in principle be
+        // removed by Lua code between the two events. See UIManager.hpp's
+        // SWidgetHit. A second button pressed while the first is still
+        // held overwrites this - true simultaneous-multi-button chords
+        // aren't tracked, same simplification the left-only version had.
         std::optional<HyprLUI::SWidgetHit> g_pressed;
+        HyprLUI::EMouseButton              g_pressedButton = HyprLUI::EMouseButton::Left;
 
         // Raw evdev keycodes whose PRESS was excluded (bare modifier, or
         // matched a real Hyprland keybind at the time) - see
@@ -36,8 +40,20 @@ namespace HyprLUI::InputHook {
         // reuse this same decision rather than re-deriving it live.
         std::unordered_set<uint32_t> g_excludedKeycodes;
 
-        void                         onMouseButton(IPointer::SButtonEvent e, Event::SCallbackInfo& info) {
-            if (e.button != BTN_LEFT)
+        // nullopt for any button we don't handle (side buttons, etc.) -
+        // event passes through untouched.
+        std::optional<HyprLUI::EMouseButton> toMouseButton(uint32_t button) {
+            switch (button) {
+                case BTN_LEFT: return HyprLUI::EMouseButton::Left;
+                case BTN_RIGHT: return HyprLUI::EMouseButton::Right;
+                case BTN_MIDDLE: return HyprLUI::EMouseButton::Middle;
+                default: return std::nullopt;
+            }
+        }
+
+        void onMouseButton(IPointer::SButtonEvent e, Event::SCallbackInfo& info) {
+            const auto button = toMouseButton(e.button);
+            if (!button)
                 return;
 
             const auto pt = g_pInputManager->getMouseCoordsInternal();
@@ -59,22 +75,24 @@ namespace HyprLUI::InputHook {
                 if (hit.empty())
                     return; // not over any of our widgets - let it through untouched
 
-                g_pressed      = hit;
-                info.cancelled = true;
+                g_pressed       = hit;
+                g_pressedButton = *button;
+                info.cancelled  = true;
                 return;
             }
 
             // Release. Only swallow/act on it if we swallowed the
-            // matching press - an unrelated release (press started
-            // elsewhere, e.g. on a real window) must pass through.
-            if (!g_pressed)
+            // matching press (same widget AND same button) - an unrelated
+            // release (press started elsewhere, or a different button)
+            // must pass through.
+            if (!g_pressed || *button != g_pressedButton)
                 return;
 
             info.cancelled = true;
 
             const auto releaseHit = HyprLUI::CUIManager::get().hitTestWidget(pt);
             if (releaseHit == *g_pressed)
-                HyprLUI::CUIManager::get().clickWidget(releaseHit.canvasName, releaseHit.widgetId); // no-op if it's actually an Input, not a Button/Checkbox
+                HyprLUI::CUIManager::get().clickWidget(releaseHit.canvasName, releaseHit.widgetId, *button); // no-op if it's actually an Input, not a Button/Checkbox
 
             g_pressed.reset();
         }

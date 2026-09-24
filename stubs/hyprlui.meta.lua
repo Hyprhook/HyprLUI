@@ -284,7 +284,8 @@
 ---@field gap? number
 ---@field align? HyprLUI.Align
 
----@alias HyprLUI.OnClickFn fun()
+-- `button` is "left", "right", or "middle".
+---@alias HyprLUI.OnClickFn fun(button: "left"|"right"|"middle")
 ---@alias HyprLUI.OnFocusFn fun()
 ---@alias HyprLUI.OnBlurFn fun()
 ---@alias HyprLUI.OnHoverFn fun()

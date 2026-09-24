@@ -173,6 +173,15 @@ namespace HyprLUI {
         std::optional<int>  fontSize;
     };
 
+    // Which physical mouse button triggered a click - see CWidget::
+    // setOnClick()/fireClick() and src/input/InputHook.cpp (press/release
+    // pairing lives there, per-button).
+    enum class EMouseButton {
+        Left,
+        Right,
+        Middle,
+    };
+
     class CWidget;
     using PWidget = std::shared_ptr<CWidget>;
 
@@ -289,21 +298,22 @@ namespace HyprLUI {
             return static_cast<bool>(m_onClick) || static_cast<bool>(m_onScroll);
         }
 
-        // A plain no-argument click callback, available on any widget, not
-        // just Button - see hitTest()'s default for what makes this
-        // actually functional. Checkbox does not use this - its click()
-        // toggles state and fires onChange(bool) instead.
-        void setOnClick(std::function<void()> fn) {
+        // A click callback (receives which button triggered it - left,
+        // right, or middle), available on any widget, not just Button -
+        // see hitTest()'s default for what makes this actually
+        // functional. Checkbox does not use this - its click() toggles
+        // state and fires onChange(bool) instead.
+        void setOnClick(std::function<void(EMouseButton)> fn) {
             m_onClick = std::move(fn);
         }
 
         // Invokes the onClick handler, if any, and reports whether one was
-        // set - called once a press and its matching release both land on
-        // this same widget.
-        bool fireClick() {
+        // set - called once a press and its matching release (same
+        // button) both land on this same widget.
+        bool fireClick(EMouseButton button) {
             if (!m_onClick)
                 return false;
-            m_onClick();
+            m_onClick(button);
             return true;
         }
 
@@ -769,7 +779,7 @@ namespace HyprLUI {
         std::optional<CHyprColor>                          m_hoverColor, m_disabledColor;
         std::function<void()>                              m_onHoverStart, m_onHoverEnd;
         std::function<void(double delta, bool vertical)>   m_onScroll;
-        std::function<void()>                              m_onClick;
+        std::function<void(EMouseButton)>                  m_onClick;
         std::vector<PWidget>                               m_children;
         PHLANIMVAR<float>                                  m_visibilityAnim; // lazily created only once setVisible() actually animates, see CWidgetAnimations
         SP<Hyprutils::Animation::SAnimationPropertyConfig> m_animationInOverride,

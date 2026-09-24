@@ -82,7 +82,7 @@ namespace HyprLUI {
         return {};
     }
 
-    bool CUIManager::clickWidget(const std::string& canvasName, const std::string& widgetId) {
+    bool CUIManager::clickWidget(const std::string& canvasName, const std::string& widgetId, EMouseButton button) {
         auto canvas = getCanvas(canvasName);
         if (!canvas || !canvas->root())
             return false;
@@ -92,14 +92,17 @@ namespace HyprLUI {
             return false;
 
         // Checkbox keeps its own dedicated click() (toggles state, fires
-        // onChange(bool) - a different shape from the generic no-arg
-        // onClick). Every other widget type falls through to the generic
-        // fireClick().
+        // onChange(bool)) - left-click only, matching a real UI toggle;
+        // right/middle just don't do anything to it. Every other widget
+        // type falls through to the generic fireClick(), any button.
         if (auto* checkbox = dynamic_cast<CCheckboxWidget*>(widget)) {
+            if (button != EMouseButton::Left)
+                return false;
             checkbox->click();
             return true;
         }
-        return widget->fireClick();
+
+        return widget->fireClick(button);
     }
 
     bool CUIManager::focusWidget(const std::string& canvasName, const std::string& widgetId) {

@@ -276,7 +276,7 @@ namespace HyprLUI::Lua {
                 widget->setOnHoverEnd(std::move(onHoverEnd));
             if (auto onScroll = fieldOnScroll(L, idx))
                 widget->setOnScroll(std::move(onScroll));
-            if (auto onClick = fieldZeroArgFn(L, idx, "onClick"))
+            if (auto onClick = fieldOnClick(L, idx))
                 widget->setOnClick(std::move(onClick));
 
             // nullptr (the common case) leaves this widget on the global

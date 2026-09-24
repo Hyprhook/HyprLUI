@@ -470,13 +470,45 @@ in full. Tracked here going forward instead of as numbered phases.
       hit-testing interaction (a fully transparent widget is still
       clickable) confirmed as-is, no change - the user's own
       responsibility, not worth special-casing.
-- [ ] **10. Mouse click handling - button-aware `onClick`** - `onClick`
-      (already a base `CWidget` field) stays the one callback, but now
-      receives an argument: which mouse button triggered it - left, right,
-      or middle. Right/middle get the exact same press-then-matching-
-      release semantics left click already has. (Supersedes an earlier
-      separate-`onLeftClick`/`onRightClick`/`onScrollClick`-fields idea -
-      do not implement that version.)
+- [x] **10. Mouse click handling - button-aware `onClick`** - `onClick`
+      (already a base `CWidget` field) stays the one callback, now
+      receiving an argument: which mouse button triggered it -
+      `"left"`/`"right"`/`"middle"` (string enum, matching `overflow`/
+      `anchor`'s own convention). Right/middle get the exact same
+      press-then-matching-release semantics left click already had.
+      Root cause of the old left-only limit: `InputHook.cpp::
+      onMouseButton()` hardcoded `if (e.button != BTN_LEFT) return;` at
+      its very top, discarding right/middle before any hit-testing ever
+      ran. Fixed by a small `toMouseButton()` mapper
+      (`BTN_LEFT`/`BTN_RIGHT`/`BTN_MIDDLE` -> `EMouseButton`, `nullopt`
+      for anything else - side buttons etc. still pass through
+      untouched, same as before). The press/release-matching state
+      (`g_pressed`) now also tracks WHICH button was pressed
+      (`g_pressedButton`), and a release only fires a click if both the
+      widget AND the button match the press - a left-press +
+      right-release (or vice versa) is not a click. New `EMouseButton`
+      enum lives on `Widget.hpp` (owns `onClick`'s own type). New
+      `fieldOnClick()` in `CallbackParsers.hpp/.cpp` (mirrors
+      `fieldOnScroll()`'s multi-arg pattern) replaces the old
+      `fieldZeroArgFn(L, idx, "onClick")` call in
+      `WidgetBuilders.cpp::applyCommonWidgetProperties()`.
+      - `Checkbox` was NOT in this task's original scope (it uses its own
+        `click()`/`onChange(bool)` path, not `onClick`) - confirmed with
+        the user live: toggle stays **left-click only**, matching how
+        checkboxes behave in every real UI toolkit; right/middle-click on
+        a `Checkbox` now correctly does nothing (previously couldn't even
+        reach it, since the whole input hook was left-only). Gated in
+        `CUIManager::clickWidget()`'s own `dynamic_cast<CCheckboxWidget*>`
+        branch, not in `InputHook.cpp` itself - keeps the button-matching
+        logic itself uniform/button-agnostic there, only the FINAL
+        dispatch (Checkbox-toggle vs generic `fireClick()`) cares which
+        button it was.
+      - Click-to-focus/blur for `Input` (`handlePressFocus()`) was left
+        unconditional for any of the three recognized buttons, not
+        left-only - clicking away from a focused `Input` with any button
+        blurs it, matching ordinary "click elsewhere" convention; not
+        explicitly asked for, but a natural default rather than a new
+        special case.
 - [ ] **11. Button keyboard focus** - deferred as part of a bigger future
       feature: Button stays click-only for now, no Enter/Space activation.
       Flagged to revisit together as proper keyboard navigation (Tab-
